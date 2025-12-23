@@ -119,32 +119,38 @@ val_gen = val_datagen.flow_from_dataframe(
 # =====================================================================
 # 6. ATTENTION BLOCK (CBAM)
 # =====================================================================
+from tensorflow.keras import layers
+
 def cbam_block(input_tensor, reduction_ratio=8):
     channel = input_tensor.shape[-1]
 
     # ---- Channel Attention ----
     avg_pool = layers.GlobalAveragePooling2D()(input_tensor)
     max_pool = layers.GlobalMaxPooling2D()(input_tensor)
-    
-    avg_dense = layers.Dense(channel // reduction_ratio, activation='relu')(avg_pool)
-    avg_dense = layers.Dense(channel, activation='sigmoid')(avg_dense)
-    
-    max_dense = layers.Dense(channel // reduction_ratio, activation='relu')(max_pool)
-    max_dense = layers.Dense(channel, activation='sigmoid')(max_dense)
+
+    shared_dense_one = layers.Dense(channel // reduction_ratio, activation='relu')
+    shared_dense_two = layers.Dense(channel, activation='sigmoid')
+
+    avg_dense = shared_dense_two(shared_dense_one(avg_pool))
+    max_dense = shared_dense_two(shared_dense_one(max_pool))
 
     channel_attention = layers.Add()([avg_dense, max_dense])
     channel_attention = layers.Activation('sigmoid')(channel_attention)
-    channel_refined = layers.Multiply()([input_tensor, layers.Reshape((1,1,channel))(channel_attention)])
+    channel_attention = layers.Reshape((1, 1, channel))(channel_attention)
 
-    # ---- Spatial Attention ----
-    avg_pool = tf.reduce_mean(channel_refined, axis=-1, keepdims=True)
-    max_pool = tf.reduce_max(channel_refined, axis=-1, keepdims=True)
+    channel_refined = layers.Multiply()([input_tensor, channel_attention])
+
+    # ---- Spatial Attention (Keras layers only) ----
+    avg_pool = layers.Lambda(lambda x: tf.reduce_mean(x, axis=-1, keepdims=True))(channel_refined)
+    max_pool = layers.Lambda(lambda x: tf.reduce_max(x, axis=-1, keepdims=True))(channel_refined)
     concat = layers.Concatenate(axis=-1)([avg_pool, max_pool])
-    spatial_attention = layers.Conv2D(1, kernel_size=7, padding='same', activation='sigmoid')(concat)
+
+    spatial_attention = layers.Conv2D(
+        filters=1, kernel_size=7, padding='same', activation='sigmoid'
+    )(concat)
 
     refined = layers.Multiply()([channel_refined, spatial_attention])
     return refined
-
 
 # =====================================================================
 # 7. MODEL DEFINITION (DenseNet121 + CBAM)
