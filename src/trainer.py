@@ -119,9 +119,6 @@ val_gen = val_datagen.flow_from_dataframe(
 # =====================================================================
 # 6. ATTENTION BLOCK (CBAM)
 # =====================================================================
-import tensorflow as tf
-from tensorflow.keras import layers, models
-
 def cbam_block(input_tensor, reduction_ratio=8):
     channel = input_tensor.shape[-1]
 
