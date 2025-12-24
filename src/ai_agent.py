@@ -1,7 +1,7 @@
 """
 ai_agent.py
 ------------
-AI-powered Clinical Assistant for Breast Ultrasound Diagnosis (TÜBİTAK Project 2025)
+AI-powered Clinical Assistant for Breast Ultrasound Diagnosis
 
 Enhancements:
 - Context-aware reporting (BIRADS / radiology language)
@@ -10,8 +10,6 @@ Enhancements:
 - Structured JSON return for integration with app.py
 - Detailed error handling and internal logging
 
-Author: <Your Name>
-Email: <Your Email>
 """
 
 import os
