@@ -35,7 +35,7 @@ from sklearn.model_selection import train_test_split
 # 1. PATHS AND DIRECTORIES
 # =====================================================================
 DATA_DIR = "Dataset_BUSI_with_GT"
-MODEL_PATH = "models/final_model_cbam.h5"  # updated model filename from trainer.py
+MODEL_PATH = "models/best_model_cbam.h5"  # updated model filename from trainer.py
 SAVE_DIR = "results"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
