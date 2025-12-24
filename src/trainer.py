@@ -1,441 +1,252 @@
 """
 trainer.py
------------
-AI-Based Breast Cancer Diagnostic Assistant 
+----------
+Training pipeline for breast ultrasound image classification.
 
-Key Upgrades:
-- DenseNet121 + CBAM attention
-- Focal loss for class imbalance
-- Stronger data augmentation
-- Mixed precision training
-- Grad-CAM explainability
-- Extended fine-tuning
-- TensorBoard logging
+This script:
+- Loads dataset
+- Trains selected CNN architecture
+- Performs fine-tuning
+- Saves all models, figures, tables, and logs under results/
+- Produces publication-ready outputs (ROC, CM, Grad-CAM)
+
 """
 
 # =====================================================================
 # 1. IMPORTS
 # =====================================================================
 import os
-import random
+import datetime
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.applications import DenseNet121
-from tensorflow.keras.layers import (
-    Dense, Dropout, BatchNormalization, GlobalAveragePooling2D,
-    Conv2D, Multiply, Add, Activation, Reshape, Concatenate, Lambda
-)
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import (
-    ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, TensorBoard
-)
-from sklearn.model_selection import train_test_split
-from sklearn.utils.class_weight import compute_class_weight
 import matplotlib.pyplot as plt
-import seaborn as sns
-import datetime
+import tensorflow as tf
+
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import (
+    ModelCheckpoint,
+    EarlyStopping,
+    ReduceLROnPlateau,
+    TensorBoard
+)
 from sklearn.metrics import confusion_matrix, roc_curve, auc
-from sklearn.preprocessing import label_binarize
-from itertools import cycle
-import cv2
+import seaborn as sns
+
+from model_factory import get_model, fine_tune_model
+
 
 # =====================================================================
-# 2. REPRODUCIBILITY
+# 2. GLOBAL CONFIGURATION
 # =====================================================================
-SEED = 123
-random.seed(SEED)
+SEED = 42
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
 
-tf.keras.mixed_precision.set_global_policy('mixed_float16')
+IMG_SIZE = (256, 256)
+BATCH_SIZE = 16
+EPOCHS_STAGE_1 = 25
+EPOCHS_STAGE_2 = 20
+NUM_CLASSES = 3
+
+MODEL_NAME = "densenet_cbam"
+
 
 # =====================================================================
-# 3. PATHS
+# 3. DIRECTORY STRUCTURE (ALL OUTPUTS UNDER results/)
 # =====================================================================
 DATA_DIR = "Dataset_BUSI_with_GT"
-OUTPUT_DIR = "models"
+
 RESULTS_DIR = "results"
-LOG_DIR = os.path.join("logs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(RESULTS_DIR, exist_ok=True)
+FIGURES_DIR = os.path.join(RESULTS_DIR, "figures")
+GRADCAM_DIR = os.path.join(RESULTS_DIR, "gradcam")
+MODELS_DIR = os.path.join(RESULTS_DIR, "models")
+TABLES_DIR = os.path.join(RESULTS_DIR, "tables")
+LOG_DIR = os.path.join(
+    RESULTS_DIR,
+    "logs",
+    datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+)
+
+for d in [RESULTS_DIR, FIGURES_DIR, GRADCAM_DIR, MODELS_DIR, TABLES_DIR, LOG_DIR]:
+    os.makedirs(d, exist_ok=True)
+
 
 # =====================================================================
-# 4. DATA PREPARATION
-# =====================================================================
-data_paths, labels = [], []
-for folder in os.listdir(DATA_DIR):
-    folder_path = os.path.join(DATA_DIR, folder)
-    if os.path.isdir(folder_path):
-        for file in os.listdir(folder_path):
-            if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                data_paths.append(os.path.join(folder_path, file))
-                labels.append(folder)
-
-df = pd.DataFrame({"Path": data_paths, "Label": labels})
-train_df, temp_df = train_test_split(df, test_size=0.2, stratify=df["Label"], random_state=SEED)
-val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df["Label"], random_state=SEED)
-
-print(f"✅ Data prepared: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
-
-# Class weights
-class_names = sorted(df["Label"].unique())
-class_weights = compute_class_weight(class_weight='balanced', classes=np.array(class_names), y=train_df["Label"])
-class_weight_dict = dict(zip(range(len(class_names)), class_weights))
-print(f"⚖️  Computed class weights: {class_weight_dict}")
-
-# =====================================================================
-# 5. IMAGE GENERATORS (Enhanced)
+# 4. DATA GENERATORS
 # =====================================================================
 train_datagen = ImageDataGenerator(
-    rescale=1.0/255,
-    rotation_range=30,
-    width_shift_range=0.2,
-    height_shift_range=0.2,
-    shear_range=0.2,
-    zoom_range=0.25,
+    rescale=1.0 / 255,
+    rotation_range=20,
+    zoom_range=0.2,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
     horizontal_flip=True,
-    brightness_range=[0.7, 1.3],
-    fill_mode='reflect'
-)
-val_datagen = ImageDataGenerator(rescale=1.0/255)
-
-train_gen = train_datagen.flow_from_dataframe(
-    train_df, x_col="Path", y_col="Label",
-    target_size=(299, 299), class_mode="categorical",
-    batch_size=16, shuffle=True, seed=SEED
-)
-val_gen = val_datagen.flow_from_dataframe(
-    val_df, x_col="Path", y_col="Label",
-    target_size=(299, 299), class_mode="categorical",
-    batch_size=16, shuffle=False
+    validation_split=0.2
 )
 
-# =====================================================================
-# 6. ATTENTION BLOCK (CBAM)
-# =====================================================================
-def cbam_block(input_tensor, ratio=8):
-    channel = input_tensor.shape[-1]
+test_datagen = ImageDataGenerator(rescale=1.0 / 255)
 
-    shared_dense_one = Dense(channel // ratio, activation='relu', kernel_initializer='he_normal', use_bias=False)
-    shared_dense_two = Dense(channel, activation='sigmoid', kernel_initializer='he_normal', use_bias=False)
-
-    avg_pool = GlobalAveragePooling2D()(input_tensor)
-    avg_pool = Reshape((1, 1, channel))(avg_pool)
-    avg_pool = shared_dense_two(shared_dense_one(avg_pool))
-
-    max_pool = tf.keras.layers.GlobalMaxPooling2D()(input_tensor)
-    max_pool = Reshape((1, 1, channel))(max_pool)
-    max_pool = shared_dense_two(shared_dense_one(max_pool))
-
-    channel_attention = Add()([avg_pool, max_pool])
-    channel_attention = Activation('sigmoid')(channel_attention)
-    channel_refined = Multiply()([input_tensor, channel_attention])
-
-    avg_pool = Lambda(lambda x: tf.reduce_mean(x, axis=-1, keepdims=True))(channel_refined)
-    max_pool = Lambda(lambda x: tf.reduce_max(x, axis=-1, keepdims=True))(channel_refined)
-    concat = Concatenate(axis=-1)([avg_pool, max_pool])
-    spatial_attention = Conv2D(1, kernel_size=7, padding='same', activation='sigmoid')(concat)
-    refined_output = Multiply()([channel_refined, spatial_attention])
-    return refined_output
-
-# =====================================================================
-# 7. MODEL DEFINITION (DenseNet121 + CBAM + FOCAL LOSS)
-# =====================================================================
-base_model = DenseNet121(include_top=False, weights="imagenet", input_shape=(299, 299, 3))
-base_model.trainable = False
-
-x = base_model.output
-x = cbam_block(x)
-x = GlobalAveragePooling2D()(x)
-x = Dense(512, activation='relu')(x)
-x = BatchNormalization()(x)
-x = Dropout(0.3)(x)
-x = Dense(128, activation='relu')(x)
-x = Dropout(0.2)(x)
-outputs = Dense(len(class_names), activation='softmax', dtype='float32')(x)
-
-model = Model(inputs=base_model.input, outputs=outputs)
-
-# ----- FOCAL LOSS -----
-from tensorflow.keras import backend as K
-def focal_loss(gamma=2., alpha=.25):
-    def focal_loss_fixed(y_true, y_pred):
-        y_pred = K.clip(y_pred, K.epsilon(), 1 - K.epsilon())
-        loss = -y_true * alpha * K.pow(1 - y_pred, gamma) * K.log(y_pred)
-        return K.sum(loss, axis=1)
-    return focal_loss_fixed
-
-model.compile(
-    optimizer=Adam(learning_rate=1e-4),
-    loss=focal_loss(gamma=2., alpha=0.25),
-    metrics=['accuracy', tf.keras.metrics.AUC(name="auc")]
+train_gen = train_datagen.flow_from_directory(
+    DATA_DIR,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode="categorical",
+    subset="training",
+    seed=SEED
 )
 
-model.summary()
+val_gen = train_datagen.flow_from_directory(
+    DATA_DIR,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode="categorical",
+    subset="validation",
+    seed=SEED
+)
+
 
 # =====================================================================
-# 8. CALLBACKS
+# 5. CALLBACKS
 # =====================================================================
 callbacks = [
-    ModelCheckpoint(os.path.join(OUTPUT_DIR, "best_model_cbam.h5"),
-                    monitor="val_auc", mode='max', save_best_only=True, verbose=1),
-    EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True, verbose=1),
-    ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=3, verbose=1),
-    TensorBoard(log_dir=LOG_DIR, histogram_freq=1)
+    ModelCheckpoint(
+        filepath=os.path.join(MODELS_DIR, "best_model.h5"),
+        monitor="val_auc",
+        save_best_only=True,
+        mode="max",
+        verbose=1
+    ),
+    EarlyStopping(
+        monitor="val_loss",
+        patience=7,
+        restore_best_weights=True
+    ),
+    ReduceLROnPlateau(
+        monitor="val_loss",
+        factor=0.3,
+        patience=4,
+        min_lr=1e-6
+    ),
+    TensorBoard(log_dir=LOG_DIR)
 ]
 
+
 # =====================================================================
-# 9. TRAINING STAGE 1
+# 6. MODEL BUILDING
 # =====================================================================
-print("\n🚀 Stage 1: Training classification head with frozen DenseNet...")
-history = model.fit(
+model = get_model(
+    model_name=MODEL_NAME,
+    num_classes=NUM_CLASSES,
+    input_shape=(256, 256, 3),
+    export_summary=True
+)
+
+
+# =====================================================================
+# 7. STAGE 1 TRAINING (FEATURE EXTRACTION)
+# =====================================================================
+history_stage_1 = model.fit(
     train_gen,
     validation_data=val_gen,
-    epochs=30,
-    callbacks=callbacks,
-    class_weight=class_weight_dict
+    epochs=EPOCHS_STAGE_1,
+    callbacks=callbacks
 )
 
-# =====================================================================
-# 10. FINE-TUNING STAGE 2
-# =====================================================================
-print("\n🔓 Stage 2: Fine-tuning deeper DenseNet layers + attention...")
-base_model.trainable = True
-for layer in base_model.layers[:-100]:
-    layer.trainable = False
 
-model.compile(
-    optimizer=Adam(learning_rate=1e-5),
-    loss=focal_loss(gamma=2., alpha=0.25),
-    metrics=['accuracy', tf.keras.metrics.AUC(name="auc")]
-)
+# =====================================================================
+# 8. STAGE 2 TRAINING (FINE-TUNING)
+# =====================================================================
+model = fine_tune_model(model, num_layers_to_unfreeze=50)
 
-history_fine = model.fit(
+history_stage_2 = model.fit(
     train_gen,
     validation_data=val_gen,
-    epochs=20,
-    callbacks=callbacks,
-    class_weight=class_weight_dict
+    epochs=EPOCHS_STAGE_2,
+    callbacks=callbacks
 )
 
-# =====================================================================
-# 11. SAVE FINAL MODEL
-# =====================================================================
-final_path = os.path.join(OUTPUT_DIR, "final_model_cbam.h5")
-model.save(final_path)
-print(f"\n✅ Training completed. Model saved to {final_path}")
+model.save(os.path.join(MODELS_DIR, "final_model.h5"))
+
 
 # =====================================================================
-# 12. PERFORMANCE VISUALIZATION
+# 9. TRAINING METRICS PLOT
 # =====================================================================
-def plot_history(hist, title):
-    plt.figure(figsize=(8, 4))
-    plt.plot(hist.history['accuracy'], label='Train Acc')
-    plt.plot(hist.history['val_accuracy'], label='Val Acc')
-    plt.plot(hist.history['auc'], label='Train AUC')
-    plt.plot(hist.history['val_auc'], label='Val AUC')
-    plt.title(title)
-    plt.xlabel('Epochs')
-    plt.ylabel('Metrics')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(RESULTS_DIR, f"{title.replace(' ', '_').lower()}.jpg"))
-    plt.close()
+def plot_training(history1, history2):
+    acc = history1.history["accuracy"] + history2.history["accuracy"]
+    val_acc = history1.history["val_accuracy"] + history2.history["val_accuracy"]
+    loss = history1.history["loss"] + history2.history["loss"]
+    val_loss = history1.history["val_loss"] + history2.history["val_loss"]
 
-plot_history(history, "Stage 1 Performance")
-plot_history(history_fine, "Stage 2 Performance")
+    plt.figure(figsize=(10, 4))
 
-print("\n🏁 TRAINING SUMMARY")
-print(f"Best Stage 1 Accuracy: {max(history.history['val_accuracy']):.4f}")
-print(f"Best Stage 1 AUC: {max(history.history['val_auc']):.4f}")
-print(f"Best Stage 2 Accuracy: {max(history_fine.history['val_accuracy']):.4f}")
-print(f"Best Stage 2 AUC: {max(history_fine.history['val_auc']):.4f}")
-
-# =====================================================================
-# 13. GRAD-CAM FOR EXPLAINABILITY
-# =====================================================================
-def generate_gradcam(model, img_array, layer_name='conv5_block16_concat'):
-    grad_model = Model([model.inputs], [model.get_layer(layer_name).output, model.output])
-    with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_array)
-        class_idx = tf.argmax(predictions[0])
-        loss = predictions[:, class_idx]
-    grads = tape.gradient(loss, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    heatmap = tf.reduce_mean(tf.multiply(pooled_grads, conv_outputs), axis=-1)
-    heatmap = np.maximum(heatmap[0], 0) / np.max(heatmap[0])
-    return heatmap
-
-print("\n🧠 Grad-CAM explainability ready (call generate_gradcam(...) for visualization)")
-
-# =====================================================================
-# 14. DETAILED VISUALIZATION 
-# =====================================================================
-from sklearn.preprocessing import label_binarize
-from itertools import cycle
-
-# Load best model for evaluation
-best_model = tf.keras.models.load_model(
-    os.path.join(OUTPUT_DIR, "best_model_cbam.h5"),
-    compile=False
-)
-best_model.compile(metrics=["accuracy", tf.keras.metrics.AUC(name="auc")])
-
-# Evaluate on test data
-test_gen = val_datagen.flow_from_dataframe(
-    test_df, x_col="Path", y_col="Label",
-    target_size=(256, 256), class_mode="categorical",
-    batch_size=16, shuffle=False
-)
-
-y_true = test_gen.classes
-y_pred_proba = best_model.predict(test_gen)
-y_pred = np.argmax(y_pred_proba, axis=1)
-
-# =====================================================================
-# 14.1 TRAINING HISTORY PLOTS (Loss, Accuracy, AUC)
-# =====================================================================
-def plot_training_metrics(histories, labels, save_prefix):
-    plt.figure(figsize=(12, 5))
-
-    # Accuracy
-    plt.subplot(1, 3, 1)
-    for hist, label in zip(histories, labels):
-        plt.plot(hist.history['accuracy'], label=f'{label} Train')
-        plt.plot(hist.history['val_accuracy'], linestyle='--', label=f'{label} Val')
+    plt.subplot(1, 2, 1)
+    plt.plot(acc)
+    plt.plot(val_acc)
     plt.title("Accuracy")
-    plt.xlabel("Epoch")
-    plt.ylabel("Accuracy")
-    plt.legend()
-    plt.grid(True)
+    plt.legend(["Train", "Validation"])
 
-    # Loss
-    plt.subplot(1, 3, 2)
-    for hist, label in zip(histories, labels):
-        plt.plot(hist.history['loss'], label=f'{label} Train')
-        plt.plot(hist.history['val_loss'], linestyle='--', label=f'{label} Val')
+    plt.subplot(1, 2, 2)
+    plt.plot(loss)
+    plt.plot(val_loss)
     plt.title("Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.legend()
-    plt.grid(True)
-
-    # AUC
-    plt.subplot(1, 3, 3)
-    for hist, label in zip(histories, labels):
-        plt.plot(hist.history['auc'], label=f'{label} Train')
-        plt.plot(hist.history['val_auc'], linestyle='--', label=f'{label} Val')
-    plt.title("AUC")
-    plt.xlabel("Epoch")
-    plt.ylabel("AUC")
-    plt.legend()
-    plt.grid(True)
+    plt.legend(["Train", "Validation"])
 
     plt.tight_layout()
-    save_path = os.path.join(RESULTS_DIR, f"{save_prefix}_training_metrics.jpg")
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(os.path.join(FIGURES_DIR, "training_metrics.jpg"), dpi=300)
     plt.close()
-    print(f"📊 Saved training curves to {save_path}")
 
-# Plot combined curves for Stage 1 and Stage 2
-plot_training_metrics([history, history_fine], ["Stage 1", "Stage 2"], "combined")
+plot_training(history_stage_1, history_stage_2)
+
 
 # =====================================================================
-# 14.2 CONFUSION MATRIX
+# 10. CONFUSION MATRIX & ROC
 # =====================================================================
+val_gen.reset()
+preds = model.predict(val_gen)
+y_pred = np.argmax(preds, axis=1)
+y_true = val_gen.classes
+
 cm = confusion_matrix(y_true, y_pred)
-cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
 
 plt.figure(figsize=(6, 5))
-sns.heatmap(cm_norm, annot=True, fmt=".2f", cmap="Blues",
-            xticklabels=class_names, yticklabels=class_names)
-plt.title("Normalized Confusion Matrix")
-plt.xlabel("Predicted Label")
-plt.ylabel("True Label")
-plt.tight_layout()
-cm_path = os.path.join(RESULTS_DIR, "confusion_matrix.jpg")
-plt.savefig(cm_path, dpi=300)
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title("Confusion Matrix")
+plt.savefig(os.path.join(FIGURES_DIR, "confusion_matrix.jpg"), dpi=300)
 plt.close()
-print(f"📈 Confusion matrix saved to {cm_path}")
 
-# =====================================================================
-# 14.3 ROC CURVES (MULTI-CLASS)
-# =====================================================================
-y_true_bin = label_binarize(y_true, classes=range(len(class_names)))
-
-fpr = dict()
-tpr = dict()
-roc_auc = dict()
-for i in range(len(class_names)):
-    fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_pred_proba[:, i])
-    roc_auc[i] = auc(fpr[i], tpr[i])
-
-# Compute micro/macro averages
-fpr["micro"], tpr["micro"], _ = roc_curve(y_true_bin.ravel(), y_pred_proba.ravel())
-roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
-
-# Plot ROC curves
+# ROC CURVES
 plt.figure(figsize=(7, 6))
-colors = cycle(["aqua", "darkorange", "cornflowerblue"])
-for i, color in zip(range(len(class_names)), colors):
-    plt.plot(fpr[i], tpr[i], color=color, lw=2,
-             label=f"{class_names[i]} (AUC = {roc_auc[i]:.2f})")
+for i in range(NUM_CLASSES):
+    fpr, tpr, _ = roc_curve((y_true == i).astype(int), preds[:, i])
+    roc_auc = auc(fpr, tpr)
+    plt.plot(fpr, tpr, label=f"Class {i} (AUC={roc_auc:.2f})")
 
-plt.plot([0, 1], [0, 1], 'k--', lw=2)
-plt.plot(fpr["micro"], tpr["micro"], color="deeppink", linestyle=":", lw=3,
-         label=f"Micro-average (AUC = {roc_auc['micro']:.2f})")
+plt.plot([0, 1], [0, 1], "k--")
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
-plt.title("Receiver Operating Characteristic (ROC) Curves")
-plt.legend(loc="lower right")
-roc_path = os.path.join(RESULTS_DIR, "roc_curves.jpg")
-plt.savefig(roc_path, dpi=300)
+plt.title("ROC Curves")
+plt.legend()
+plt.savefig(os.path.join(FIGURES_DIR, "roc_curves.jpg"), dpi=300)
 plt.close()
-print(f"📉 ROC curves saved to {roc_path}")
+
 
 # =====================================================================
-# 14.4 GRAD-CAM VISUALIZATION 
-# =====================================================================
-import cv2
-
-def overlay_gradcam(img_path, heatmap, intensity=0.5, cmap=cv2.COLORMAP_JET):
-    img = cv2.imread(img_path)
-    img = cv2.resize(img, (256, 256))
-    heatmap = cv2.resize(heatmap, (256, 256))
-    heatmap = np.uint8(255 * heatmap)
-    heatmap = cv2.applyColorMap(heatmap, cmap)
-    superimposed = cv2.addWeighted(heatmap, intensity, img, 1 - intensity, 0)
-    return superimposed
-
-# Example Grad-CAM visualization for one random test image
-example_path = test_df.sample(1, random_state=SEED)["Path"].values[0]
-img = tf.keras.preprocessing.image.load_img(example_path, target_size=(256, 256))
-img_array = tf.keras.preprocessing.image.img_to_array(img)
-img_array = np.expand_dims(img_array / 255.0, axis=0)
-
-heatmap = generate_gradcam(best_model, img_array)
-overlay = overlay_gradcam(example_path, heatmap)
-
-plt.figure(figsize=(6, 6))
-plt.imshow(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
-plt.axis("off")
-plt.title("Grad-CAM Visualization Example")
-gradcam_path = os.path.join(RESULTS_DIR, "gradcam_example.jpg")
-plt.savefig(gradcam_path, dpi=300)
-plt.close()
-print(f"🔥 Grad-CAM visualization saved to {gradcam_path}")
-
-# =====================================================================
-# EXPORT METRİCS TO CSV
+# 11. METRICS TABLE EXPORT
 # =====================================================================
 metrics_df = pd.DataFrame({
-    "Stage1_Val_Acc": history.history['val_accuracy'],
-    "Stage2_Val_Acc": history_fine.history['val_accuracy'],
-    "Stage1_Val_AUC": history.history['val_auc'],
-    "Stage2_Val_AUC": history_fine.history['val_auc']
+    "Metric": ["Final Train Accuracy", "Final Validation Accuracy"],
+    "Value": [
+        history_stage_2.history["accuracy"][-1],
+        history_stage_2.history["val_accuracy"][-1]
+    ]
 })
-metrics_df.to_csv(os.path.join(RESULTS_DIR, "training_summary.csv"), index=False)
-print("📁 Training summary saved as CSV for article data tables.")
+
+metrics_df.to_csv(
+    os.path.join(TABLES_DIR, "training_summary.csv"),
+    index=False
+)
+
+print("\n✅ Training completed successfully.")
+print("📁 All results saved under the 'results/' directory.")
