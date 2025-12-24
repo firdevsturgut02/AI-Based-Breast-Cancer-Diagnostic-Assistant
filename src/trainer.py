@@ -3,21 +3,20 @@ trainer.py
 
 AI-Based Breast Cancer Diagnostic Assistant 
 
-Key Upgrades:
-- DenseNet121 + CBAM attention
-- Focal loss for class imbalance
-- Stronger data augmentation
-- Mixed precision training
-- Grad-CAM explainability
-- Extended fine-tuning
-- TensorBoard logging
+---------------------------------------------------
+✅ DenseNet121 + CBAM Attention
+✅ Focal Loss for class imbalance
+✅ Cosine learning rate decay
+✅ Strong data augmentation
+✅ Extended fine-tuning
+✅ Mixed precision
+✅ Grad-CAM explainability
 """
 
 # =====================================================================
 # 1. IMPORTS
 # =====================================================================
-import os
-import random
+import os, random, datetime, cv2
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -30,17 +29,15 @@ from tensorflow.keras.layers import (
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import (
-    ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, TensorBoard
+    ModelCheckpoint, EarlyStopping, ReduceLROnPlateau, TensorBoard, LearningRateScheduler
 )
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
-import matplotlib.pyplot as plt
-import seaborn as sns
-import datetime
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 from sklearn.preprocessing import label_binarize
+import matplotlib.pyplot as plt
+import seaborn as sns
 from itertools import cycle
-import cv2
 
 # =====================================================================
 # 2. REPRODUCIBILITY
@@ -49,7 +46,6 @@ SEED = 123
 random.seed(SEED)
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
-
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
 # =====================================================================
@@ -77,44 +73,43 @@ for folder in os.listdir(DATA_DIR):
 df = pd.DataFrame({"Path": data_paths, "Label": labels})
 train_df, temp_df = train_test_split(df, test_size=0.2, stratify=df["Label"], random_state=SEED)
 val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df["Label"], random_state=SEED)
-
 print(f"✅ Data prepared: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
-# Class weights
 class_names = sorted(df["Label"].unique())
 class_weights = compute_class_weight(class_weight='balanced', classes=np.array(class_names), y=train_df["Label"])
 class_weight_dict = dict(zip(range(len(class_names)), class_weights))
-print(f"⚖️  Computed class weights: {class_weight_dict}")
+print(f"⚖️ Computed class weights: {class_weight_dict}")
 
 # =====================================================================
-# 5. IMAGE GENERATORS (Enhanced)
+# 5. DATA AUGMENTATION
 # =====================================================================
 train_datagen = ImageDataGenerator(
     rescale=1.0/255,
-    rotation_range=30,
-    width_shift_range=0.2,
-    height_shift_range=0.2,
-    shear_range=0.2,
-    zoom_range=0.25,
+    rotation_range=35,
+    width_shift_range=0.25,
+    height_shift_range=0.25,
+    shear_range=0.25,
+    zoom_range=0.35,
     horizontal_flip=True,
-    brightness_range=[0.7, 1.3],
+    vertical_flip=True,
+    brightness_range=[0.6, 1.4],
     fill_mode='reflect'
 )
 val_datagen = ImageDataGenerator(rescale=1.0/255)
 
 train_gen = train_datagen.flow_from_dataframe(
     train_df, x_col="Path", y_col="Label",
-    target_size=(299, 299), class_mode="categorical",
-    batch_size=16, shuffle=True, seed=SEED
+    target_size=(320, 320), class_mode="categorical",
+    batch_size=8, shuffle=True, seed=SEED
 )
 val_gen = val_datagen.flow_from_dataframe(
     val_df, x_col="Path", y_col="Label",
-    target_size=(299, 299), class_mode="categorical",
-    batch_size=16, shuffle=False
+    target_size=(320, 320), class_mode="categorical",
+    batch_size=8, shuffle=False
 )
 
 # =====================================================================
-# 6. ATTENTION BLOCK (CBAM)
+# 6. CBAM ATTENTION BLOCK
 # =====================================================================
 def cbam_block(input_tensor, ratio=8):
     channel = input_tensor.shape[-1]
@@ -134,27 +129,27 @@ def cbam_block(input_tensor, ratio=8):
     channel_attention = Activation('sigmoid')(channel_attention)
     channel_refined = Multiply()([input_tensor, channel_attention])
 
-    avg_pool = Lambda(lambda x: tf.reduce_mean(x, axis=-1, keepdims=True))(channel_refined)
-    max_pool = Lambda(lambda x: tf.reduce_max(x, axis=-1, keepdims=True))(channel_refined)
+    avg_pool = Lambda(lambda x: tf.reduce_mean(x, axis=-1, keepdims=True), output_shape=lambda s: (s[0], s[1], s[2], 1))(channel_refined)
+    max_pool = Lambda(lambda x: tf.reduce_max(x, axis=-1, keepdims=True), output_shape=lambda s: (s[0], s[1], s[2], 1))(channel_refined)
     concat = Concatenate(axis=-1)([avg_pool, max_pool])
     spatial_attention = Conv2D(1, kernel_size=7, padding='same', activation='sigmoid')(concat)
     refined_output = Multiply()([channel_refined, spatial_attention])
     return refined_output
 
 # =====================================================================
-# 7. MODEL DEFINITION (DenseNet121 + CBAM + FOCAL LOSS)
+# 7. MODEL DEFINITION
 # =====================================================================
-base_model = DenseNet121(include_top=False, weights="imagenet", input_shape=(299, 299, 3))
+base_model = DenseNet121(include_top=False, weights="imagenet", input_shape=(320, 320, 3))
 base_model.trainable = False
 
 x = base_model.output
 x = cbam_block(x)
 x = GlobalAveragePooling2D()(x)
-x = Dense(512, activation='relu')(x)
+x = Dense(512, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
 x = BatchNormalization()(x)
+x = Dropout(0.4)(x)
+x = Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
 x = Dropout(0.3)(x)
-x = Dense(128, activation='relu')(x)
-x = Dropout(0.2)(x)
 outputs = Dense(len(class_names), activation='softmax', dtype='float32')(x)
 
 model = Model(inputs=base_model.input, outputs=outputs)
@@ -174,23 +169,27 @@ model.compile(
     metrics=['accuracy', tf.keras.metrics.AUC(name="auc")]
 )
 
-model.summary()
-
 # =====================================================================
 # 8. CALLBACKS
 # =====================================================================
+def cosine_decay(epoch):
+    initial_lr = 1e-4
+    epochs = 30
+    return initial_lr * 0.5 * (1 + np.cos(np.pi * epoch / epochs))
+
 callbacks = [
-    ModelCheckpoint(os.path.join(OUTPUT_DIR, "best_model_cbam.h5"),
+    ModelCheckpoint(os.path.join(OUTPUT_DIR, "best_model_cbam.keras"),
                     monitor="val_auc", mode='max', save_best_only=True, verbose=1),
-    EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True, verbose=1),
-    ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=3, verbose=1),
-    TensorBoard(log_dir=LOG_DIR, histogram_freq=1)
+    EarlyStopping(monitor="val_loss", patience=7, restore_best_weights=True, verbose=1),
+    ReduceLROnPlateau(monitor="val_loss", factor=0.3, patience=3, verbose=1),
+    LearningRateScheduler(cosine_decay),
+    TensorBoard(log_dir=LOG_DIR)
 ]
 
 # =====================================================================
 # 9. TRAINING STAGE 1
 # =====================================================================
-print("\n🚀 Stage 1: Training classification head with frozen DenseNet...")
+print("\n🚀 Stage 1: Training classification head...")
 history = model.fit(
     train_gen,
     validation_data=val_gen,
@@ -202,13 +201,13 @@ history = model.fit(
 # =====================================================================
 # 10. FINE-TUNING STAGE 2
 # =====================================================================
-print("\n🔓 Stage 2: Fine-tuning deeper DenseNet layers + attention...")
+print("\n🔓 Stage 2: Fine-tuning DenseNet deeper layers...")
 base_model.trainable = True
-for layer in base_model.layers[:-100]:
+for layer in base_model.layers[:-60]:
     layer.trainable = False
 
 model.compile(
-    optimizer=Adam(learning_rate=1e-5),
+    optimizer=Adam(learning_rate=5e-6),
     loss=focal_loss(gamma=2., alpha=0.25),
     metrics=['accuracy', tf.keras.metrics.AUC(name="auc")]
 )
@@ -224,7 +223,7 @@ history_fine = model.fit(
 # =====================================================================
 # 11. SAVE FINAL MODEL
 # =====================================================================
-final_path = os.path.join(OUTPUT_DIR, "final_model_cbam.h5")
+final_path = os.path.join(OUTPUT_DIR, "final_model_cbam.keras")
 model.save(final_path)
 print(f"\n✅ Training completed. Model saved to {final_path}")
 
