@@ -1,83 +1,85 @@
 """
 ai_agent.py
-------------
-AI-powered Clinical Assistant for Breast Ultrasound Diagnosis
+-------------------------------------------------
+AI-Assisted Clinical Decision Support Module
+for Breast Ultrasound Interpretation
 
-Enhancements:
-- Context-aware reporting (BIRADS / radiology language)
-- Multilingual summaries (English + Turkish)
-- Safe output sanitization
-- Structured JSON return for integration with app.py
-- Detailed error handling and internal logging
+IMPORTANT NOTICE:
+- This system DOES NOT provide medical diagnosis.
+- All outputs are AI-assisted, educational, and decision-support only.
+- Final clinical responsibility belongs to licensed radiologists.
 
+-------------------------------------------------
 """
 
 import os
 import re
 import json
 import datetime
+from typing import Dict, Any
 from groq import Client
 
-
+# =================================================
+# 🧠 MEDICAL ASSISTANT CORE
+# =================================================
 class MedicalAssistant:
     """
-    A professional AI Radiology assistant powered by Groq's LLaMA 3.3-70B.
-    Generates interpretive diagnostic reports and supports conversational Q&A.
+    AI-assisted Radiology Decision Support System
+    designed for research and educational use.
     """
 
-    def __init__(self, api_key: str, model_name: str = "llama-3.3-70b-versatile"):
+    def __init__(
+        self,
+        api_key: str,
+        model_name: str = "llama-3.3-70b-versatile",
+        enable_logging: bool = True,
+    ):
         self.model = model_name
         self.client = Client(api_key=api_key)
 
+        self.enable_logging = enable_logging
         self.log_dir = "logs"
         os.makedirs(self.log_dir, exist_ok=True)
 
-        print(f"🧠 MedicalAssistant initialized with model: {self.model}")
+        print(f"[INFO] MedicalAssistant initialized | Model: {self.model}")
 
-    # -----------------------------------------------------------------
-    # 🔍 CLINICAL INSIGHT GENERATION
-    # -----------------------------------------------------------------
-    def get_clinical_insight(self, prediction_label: str, confidence: float, language: str = "en"):
+    # =================================================
+    # 🔍 AI-ASSISTED CLINICAL INTERPRETATION
+    # =================================================
+    def get_clinical_insight(
+        self,
+        prediction_label: str,
+        confidence: float,
+        language: str = "en",
+    ) -> Dict[str, Any]:
         """
-        Generates a structured radiology-style interpretation for the AI model output.
+        Generates an AI-assisted radiological interpretation.
 
-        Args:
-            prediction_label (str): 'Benign', 'Malignant', or 'Normal'
-            confidence (float): Model confidence percentage (0–100)
-            language (str): 'en' or 'tr' for bilingual reporting
-
-        Returns:
-            dict: {status, analysis, language}
+        DISCLAIMER:
+        This output is NOT a medical diagnosis and MUST
+        be reviewed by a licensed radiologist.
         """
 
-        if language.lower() == "tr":
-            prompt = f"""
-            Sen, Meme Ultrason görüntüleri konusunda uzmanlaşmış bir Radyoloji Yapay Zekâ asistanısın.
-            Aşağıdaki tanısal sonucu profesyonel bir şekilde yorumla:
+        confidence = float(max(0.0, min(confidence, 100.0)))
 
-            🩺 **Tanı Sonucu:** {prediction_label}
-            🎯 **Güven Skoru:** {confidence:.2f}%
+        prompt = f"""
+        You are an **AI-based Radiology Decision Support System**.
+        You do NOT establish medical diagnoses.
 
-            Lütfen raporda şunları ekle:
-            1. Kısa bir tıbbi yorum (iyi huylu, kötü huylu veya normal)
-            2. Görüntü bulgularına göre klinik değerlendirme
-            3. BIRADS sınıflamasına göre önerilen bir sonraki adım
-            4. Son olarak, bu değerlendirme **yapay zekâ destekli bir ön yorumdur** ve lisanslı bir radyolog tarafından doğrulanmalıdır.
-            """
-        else:
-            prompt = f"""
-            You are an expert AI Radiologist specializing in Breast Ultrasound interpretation.
-            Provide a structured, concise report for the following AI model result:
+        Model Output:
+        - Classification: {prediction_label}
+        - Confidence Score: {confidence:.2f}%
 
-            🩺 **Diagnostic Result:** {prediction_label}
-            🎯 **Confidence Score:** {confidence:.2f}%
+        Please structure your response as follows:
 
-            Please include:
-            1. A brief clinical interpretation (Benign, Malignant, or Normal)
-            2. Radiological reasoning based on tissue characteristics
-            3. Recommended next step following BI-RADS guidelines
-            4. End with a clear disclaimer stating this is an **AI-assisted opinion**, not a medical diagnosis.
-            """
+        1. Imaging-based preliminary assessment
+        2. Probabilistic interpretation using BI-RADS terminology
+        3. Recommended clinical next step (screening, follow-up, biopsy consideration, etc.)
+        4. Mandatory disclaimer:
+           "This is an AI-assisted preliminary opinion,
+            not a medical diagnosis. Final evaluation
+            must be performed by a licensed radiologist."
+        """
 
         try:
             response = self.client.chat.completions.create(
@@ -86,50 +88,67 @@ class MedicalAssistant:
                     {
                         "role": "system",
                         "content": (
-                            "You are a board-certified Radiologist Assistant AI. "
-                            "Always use formal medical tone, BI-RADS terminology, and avoid exaggeration."
+                            "You are an academic-grade AI radiology assistant. "
+                            "Use formal medical language. "
+                            "Never claim diagnostic certainty. "
+                            "Always emphasize AI-assisted decision support."
                         ),
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.6,
-                max_tokens=800,
+                temperature=0.4,
+                max_tokens=700,
             )
 
-            content = (
-                response.choices[0].message.content.strip()
-                if hasattr(response, "choices") and response.choices
-                else "No response generated."
-            )
+            raw_output = response.choices[0].message.content
+            sanitized_output = self._sanitize_output(raw_output)
 
-            sanitized = self._sanitize_output(content)
-            self._log_interaction("clinical_insight", prediction_label, sanitized)
+            if self.enable_logging:
+                self._log_interaction(
+                    mode="clinical_insight",
+                    input_data={
+                        "label": prediction_label,
+                        "confidence": confidence,
+                        "language": language,
+                    },
+                    response=sanitized_output,
+                )
 
             return {
                 "status": "success",
+                "type": "AI_ASSISTED_CLINICAL_INTERPRETATION",
                 "language": language,
-                "analysis": sanitized,
+                "confidence": confidence,
+                "output": sanitized_output,
+                "disclaimer": (
+                    "AI-assisted output only. Not a medical diagnosis."
+                ),
                 "timestamp": datetime.datetime.now().isoformat(),
             }
 
         except Exception as e:
-            error_msg = f"❌ Error generating clinical insight: {e}"
-            print(error_msg)
-            return {
-                "status": "error",
-                "message": error_msg,
-            }
+            return self._error_response("clinical_insight", e)
 
-    # -----------------------------------------------------------------
-    # 💬 CHAT FUNCTIONALITY
-    # -----------------------------------------------------------------
-    def chat(self, user_query: str, context: str = ""):
+    # =================================================
+    # 💬 EDUCATIONAL CHAT MODULE
+    # =================================================
+    def chat(self, user_query: str, context: str = "") -> Dict[str, Any]:
         """
-        Handles conversational Q&A for breast ultrasound topics.
-        Can be integrated with Streamlit chat interface.
+        Educational Q&A module related to breast imaging.
+        This function does NOT provide medical advice.
         """
 
-        prompt = f"Context: {context}\n\nUser Question: {user_query}"
+        prompt = f"""
+        Context (if available):
+        {context}
+
+        User Question:
+        {user_query}
+
+        Respond in an educational and explanatory manner.
+        Avoid diagnosis or treatment recommendations.
+        Reference BI-RADS terminology when appropriate.
+        """
 
         try:
             response = self.client.chat.completions.create(
@@ -138,9 +157,8 @@ class MedicalAssistant:
                     {
                         "role": "system",
                         "content": (
-                            "You are a helpful AI Medical Assistant specializing in breast imaging. "
-                            "Always cite BI-RADS or radiological reasoning if applicable. "
-                            "Avoid giving direct medical advice; provide educational responses."
+                            "You are an educational medical AI assistant. "
+                            "Do not provide diagnosis or treatment advice."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -149,50 +167,63 @@ class MedicalAssistant:
                 max_tokens=600,
             )
 
-            content = (
-                response.choices[0].message.content.strip()
-                if hasattr(response, "choices") and response.choices
-                else "No response generated."
+            output = self._sanitize_output(
+                response.choices[0].message.content
             )
 
-            sanitized = self._sanitize_output(content)
-            self._log_interaction("chat", user_query, sanitized)
+            if self.enable_logging:
+                self._log_interaction(
+                    mode="chat",
+                    input_data=user_query,
+                    response=output,
+                )
 
             return {
                 "status": "success",
-                "reply": sanitized,
+                "type": "EDUCATIONAL_RESPONSE",
+                "reply": output,
                 "timestamp": datetime.datetime.now().isoformat(),
             }
 
         except Exception as e:
-            error_msg = f"❌ Error during chat: {e}"
-            print(error_msg)
-            return {
-                "status": "error",
-                "message": error_msg,
-            }
+            return self._error_response("chat", e)
 
-    # -----------------------------------------------------------------
+    # =================================================
     # 🧹 INTERNAL UTILITIES
-    # -----------------------------------------------------------------
-    def _sanitize_output(self, text: str) -> str:
+    # =================================================
+    @staticmethod
+    def _sanitize_output(text: str) -> str:
         """
-        Cleans up model output (removes markdown, unwanted symbols).
-        Ensures safe display in Streamlit or HTML contexts.
+        Removes markdown artifacts and excessive formatting
+        to ensure safe rendering in UI environments.
         """
-        clean = re.sub(r"[#*_`]+", "", text)
-        clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
-        return clean
+        text = re.sub(r"[#*_`]+", "", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
-    def _log_interaction(self, mode: str, query: str, response: str):
-        """Logs AI interactions to a timestamped JSONL file for auditing or paper appendix."""
-        log_file = os.path.join(self.log_dir, "ai_agent_log.jsonl")
-        log_entry = {
+    def _log_interaction(self, mode: str, input_data, response: str):
+        """
+        Logs AI interactions for auditability and reproducibility.
+        """
+        log_file = os.path.join(self.log_dir, "ai_agent_audit.jsonl")
+        entry = {
             "timestamp": datetime.datetime.now().isoformat(),
             "mode": mode,
-            "input": query,
+            "input": input_data,
             "response": response,
+            "model": self.model,
         }
         with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    @staticmethod
+    def _error_response(module: str, error: Exception) -> Dict[str, Any]:
+        """
+        Standardized error response for safe integration.
+        """
+        return {
+            "status": "error",
+            "module": module,
+            "message": str(error),
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
