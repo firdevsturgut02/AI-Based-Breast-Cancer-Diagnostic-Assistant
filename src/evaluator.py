@@ -7,59 +7,44 @@ import pandas as pd
 import tensorflow as tf
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
-from sklearn.preprocessing import label_binarize
+from sklearn.metrics import confusion_matrix, roc_curve, auc
 from sklearn.model_selection import train_test_split
-from keras import ops
+from model_factory import get_model # Mimarinin temiz kurulumu için
 
 # =====================================================================
-# PATHS
+# 1. PATHS & CONFIG
 # =====================================================================
 DATA_DIR = "Dataset_BUSI_with_GT"
-MODEL_PATH = os.path.join("results", "trainer", "models", "best_model.h5")
+MODEL_WEIGHTS_PATH = os.path.join("results", "trainer", "models", "best_model.h5")
 EVAL_OUT_DIR = os.path.join("results", "evaluator")
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 # =====================================================================
-# MODEL LOADING (FIXED FOR KERAS 3 SERIALIZATION)
+# 2. MODEL LOADING (SAFE METHOD)
 # =====================================================================
-print("\n🔍 Loading model and handling Keras 3 custom objects...")
+print("\n🔍 Model mimarisi oluşturuluyor ve ağırlıklar yükleniyor...")
 
-# Keras 3'ün Mean ve Amax fonksiyonlarını 'wrap' ederek yüklüyoruz.
-# Bu yapı, Keras'ın fonksiyonu 'x' argümanı olmadan çağırmasını engeller.
-@tf.keras.utils.register_keras_serializable(package="Custom")
-def Mean(x, **kwargs):
-    return ops.mean(x, **kwargs)
+# Hata almamak için önce sıfır model kuruyoruz, sonra eğitilmiş ağırlıkları basıyoruz
+model = get_model(num_classes=3, export_summary=False)
 
-@tf.keras.utils.register_keras_serializable(package="Custom")
-def Amax(x, **kwargs):
-    return ops.amax(x, **kwargs)
-
-custom_objects = {
-    "Mean": Mean,
-    "Amax": Amax
-}
-
-if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"❌ Model dosyası bulunamadı: {MODEL_PATH}")
+if not os.path.exists(MODEL_WEIGHTS_PATH):
+    raise FileNotFoundError(f"❌ Model dosyası bulunamadı: {MODEL_WEIGHTS_PATH}")
 
 try:
-    # custom_object_scope kullanarak yükleme
-    with tf.keras.utils.custom_object_scope(custom_objects):
-        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-    print("✅ Model başarıyla yüklendi.")
+    # Sadece ağırlıkları yüklemek, Keras 3'teki 'Mean' hatasını %100 bypass eder
+    model.load_weights(MODEL_WEIGHTS_PATH)
+    print("✅ Ağırlıklar başarıyla yüklendi.")
 except Exception as e:
-    print(f"⚠️ Hata: {e}")
-    print("💡 Alternatif yükleme deneniyor (Direct map)...")
-    model = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
+    print(f"⚠️ Ağırlık yükleme hatası, alternatif deneniyor: {e}")
+    model = tf.keras.models.load_model(MODEL_WEIGHTS_PATH, compile=False, safe_mode=False)
 
 # =====================================================================
-# HARDWARE & PERFORMANCE REPORT
+# 3. PERFORMANCE & HARDWARE REPORT
 # =====================================================================
 gpu_devices = tf.config.list_physical_devices('GPU')
 device_name = "/device:GPU:0" if gpu_devices else "CPU"
 
-# Çıkarım hızı ölçümü
+# Inference hızı ölçümü
 dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
 for _ in range(5): _ = model.predict(dummy_input, verbose=0)
 start = time.time()
@@ -68,7 +53,7 @@ latency = ((time.time() - start) / 50) * 1000
 fps = 1000 / latency
 
 # =====================================================================
-# TEST DATA PREPARATION
+# 4. DATA PREPARATION
 # =====================================================================
 data_paths, labels = [], []
 for folder in os.listdir(DATA_DIR):
@@ -91,7 +76,7 @@ test_gen = ImageDataGenerator(rescale=1./255).flow_from_dataframe(
 class_names = sorted(test_gen.class_indices.keys())
 
 # =====================================================================
-# METRICS & PLOTS
+# 5. EVALUATION & VISUALS
 # =====================================================================
 print("🧪 Test seti değerlendiriliyor...")
 preds = model.predict(test_gen, verbose=1)
@@ -102,16 +87,14 @@ y_true = test_gen.classes
 plt.figure(figsize=(8, 6))
 sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt="d", cmap="Blues", 
             xticklabels=class_names, yticklabels=class_names)
-plt.title("Karmaşıklık Matrisi")
+plt.title("Confusion Matrix (Test Set)")
 plt.savefig(os.path.join(EVAL_OUT_DIR, "confusion_matrix.png"), dpi=300)
 plt.close()
 
-# ROC Analysis
-
+# ROC Curves
 plt.figure(figsize=(9, 7))
-y_true_bin = label_binarize(y_true, classes=range(len(class_names)))
 for i, label in enumerate(class_names):
-    fpr, tpr, _ = roc_curve(y_true_bin[:, i], preds[:, i])
+    fpr, tpr, _ = roc_curve((y_true == i).astype(int), preds[:, i])
     plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})')
 plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
 plt.legend(); plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300); plt.close()
@@ -135,16 +118,16 @@ img_arr = tf.keras.preprocessing.image.img_to_array(tf.keras.preprocessing.image
 cam = get_gradcam(model, np.expand_dims(img_arr, axis=0))
 heatmap = cv2.applyColorMap(np.uint8(255 * cv2.resize(cam, (256, 256))), cv2.COLORMAP_JET)
 res = cv2.addWeighted(np.uint8(255 * img_arr), 0.6, heatmap, 0.4, 0)
-cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_sample.png"), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
+cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_explanation.png"), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
 
 # Technical Summary
 tech_report = {
     "Device": device_name,
     "Latency_ms": round(latency, 2),
-    "Throughput_FPS": round(fps, 2),
+    "FPS": round(fps, 2),
     "Test_Accuracy": float(np.mean(y_true == y_pred))
 }
 with open(os.path.join(EVAL_OUT_DIR, "performance.json"), "w") as f:
     json.dump(tech_report, f, indent=4)
 
-print(f"\n✅ Tüm işlemler tamamlandı. Sonuçlar: {EVAL_OUT_DIR}/")
+print(f"\n✅ Evaluator tamamlandı. Sonuçlar: {EVAL_OUT_DIR}/")
