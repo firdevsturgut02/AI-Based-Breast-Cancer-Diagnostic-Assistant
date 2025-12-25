@@ -5,11 +5,10 @@ High-performance data loading and augmentation module
 for breast ultrasound image classification.
 
 Features:
-- Albumentations v1.4+ compatible augmentation pipeline
-- Robust class balancing (training set only)
-- CLAHE and medical-grade noise simulation
-- Stratified train/validation/test splits
-- Automatic dataset visualization & reporting
+✅ Class distribution visualization (before & after balancing)
+✅ Image resolution and augmentation checks
+✅ All plots saved in results/
+✅ Auto-generated PDF report summarizing dataset insights
 -------------------------------------------------
 """
 
@@ -26,6 +25,7 @@ from tensorflow.keras.utils import Sequence
 from sklearn.model_selection import train_test_split
 from sklearn.utils import resample
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 # =====================================================================
 # 2. GLOBAL PATHS
@@ -61,32 +61,21 @@ class MedicalDataGenerator(Sequence):
         }
         self.n_classes = len(self.class_map)
 
-        # Augmentation pipeline (Albumentations v1.4+ safe)
+        # Augmentation pipeline
         if self.augment:
             self.aug = A.Compose([
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.2),
                 A.RandomBrightnessContrast(0.2, 0.2, p=0.4),
-                A.ShiftScaleRotate(
-                    shift_limit=0.0625,
-                    scale_limit=0.1,
-                    rotate_limit=20,
-                    p=0.4
-                ),
+                A.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.1, rotate_limit=20, p=0.4),
                 A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=0.5),
                 A.ElasticTransform(alpha=1, sigma=50, p=0.25),
-                A.GaussNoise(std_range=(0.01, 0.05), p=0.25),
-                A.Normalize(
-                    mean=(0.485, 0.456, 0.406),
-                    std=(0.229, 0.224, 0.225)
-                )
+                A.GaussNoise(var_limit=(10.0, 50.0), p=0.25),
+                A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
             ])
         else:
             self.aug = A.Compose([
-                A.Normalize(
-                    mean=(0.485, 0.456, 0.406),
-                    std=(0.229, 0.224, 0.225)
-                )
+                A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
             ])
 
         if self.shuffle:
@@ -128,7 +117,8 @@ class MedicalDataGenerator(Sequence):
 # =====================================================================
 def prepare_data_frames(data_dir: str, seed: int = 123, balance: bool = True):
     """
-    Creates stratified train/validation/test DataFrames.
+    Creates stratified train/validation/test DataFrames and
+    automatically saves visual reports before & after balancing.
     """
 
     paths, labels = [], []
@@ -155,11 +145,14 @@ def prepare_data_frames(data_dir: str, seed: int = 123, balance: bool = True):
         temp_df, test_size=0.5, stratify=temp_df["Label"], random_state=seed
     )
 
+    # BEFORE BALANCING
+    plot_class_distribution(train_df, "Before_Balancing")
+
     if balance:
         train_df = balance_dataframe(train_df, seed)
+        plot_class_distribution(train_df, "After_Balancing")
 
     print(f"[INFO] Dataset prepared | Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
-
     return train_df, val_df, test_df
 
 # =====================================================================
@@ -175,9 +168,7 @@ def balance_dataframe(df: pd.DataFrame, seed: int = 42):
     balanced = []
     for label in counts.index:
         df_cls = df[df["Label"] == label]
-        df_resampled = resample(
-            df_cls, replace=True, n_samples=max_count, random_state=seed
-        )
+        df_resampled = resample(df_cls, replace=True, n_samples=max_count, random_state=seed)
         balanced.append(df_resampled)
 
     balanced_df = pd.concat(balanced).sample(frac=1).reset_index(drop=True)
@@ -185,17 +176,15 @@ def balance_dataframe(df: pd.DataFrame, seed: int = 42):
     return balanced_df
 
 # =====================================================================
-# 6. DATASET VISUALIZATIONS
+# 6. VISUALIZATION HELPERS
 # =====================================================================
 def plot_class_distribution(df: pd.DataFrame, name: str):
-    counts = df["Label"].value_counts()
     plt.figure(figsize=(6, 4))
-    counts.plot(kind="bar")
+    df["Label"].value_counts().plot(kind="bar", color="teal")
     plt.title(f"Class Distribution – {name}")
     plt.xlabel("Class")
     plt.ylabel("Number of Samples")
     plt.tight_layout()
-
     path = os.path.join(RESULTS_DIR, f"class_distribution_{name.lower()}.png")
     plt.savefig(path, dpi=300)
     plt.close()
@@ -204,7 +193,6 @@ def plot_class_distribution(df: pd.DataFrame, name: str):
 def visualize_sample_images(df: pd.DataFrame, samples_per_class: int = 3):
     classes = df["Label"].unique()
     plt.figure(figsize=(samples_per_class * 3, len(classes) * 3))
-
     idx = 1
     for cls in classes:
         subset = df[df["Label"] == cls].sample(samples_per_class)
@@ -216,7 +204,6 @@ def visualize_sample_images(df: pd.DataFrame, samples_per_class: int = 3):
             plt.title(cls)
             plt.axis("off")
             idx += 1
-
     plt.tight_layout()
     path = os.path.join(RESULTS_DIR, "sample_images_per_class.png")
     plt.savefig(path, dpi=300)
@@ -225,21 +212,18 @@ def visualize_sample_images(df: pd.DataFrame, samples_per_class: int = 3):
 
 def plot_image_resolution_check(df: pd.DataFrame):
     widths, heights = [], []
-
     for path in df["Path"].sample(min(100, len(df))):
         img = cv2.imread(path)
         if img is not None:
             h, w = img.shape[:2]
             widths.append(w)
             heights.append(h)
-
     plt.figure(figsize=(6, 4))
-    plt.scatter(widths, heights, alpha=0.6)
+    plt.scatter(widths, heights, alpha=0.6, color="purple")
     plt.xlabel("Width (px)")
     plt.ylabel("Height (px)")
     plt.title("Image Resolution Distribution")
     plt.tight_layout()
-
     path = os.path.join(RESULTS_DIR, "image_resolution_distribution.png")
     plt.savefig(path, dpi=300)
     plt.close()
@@ -247,7 +231,6 @@ def plot_image_resolution_check(df: pd.DataFrame):
 
 def visualize_augmentation_examples(generator, n: int = 5):
     X, _ = generator.__getitem__(0)
-
     plt.figure(figsize=(n * 3, 3))
     for i in range(min(n, len(X))):
         img = X[i]
@@ -256,7 +239,6 @@ def visualize_augmentation_examples(generator, n: int = 5):
         plt.imshow(img)
         plt.title("Augmented")
         plt.axis("off")
-
     plt.tight_layout()
     path = os.path.join(RESULTS_DIR, "augmentation_examples.png")
     plt.savefig(path, dpi=300)
@@ -264,19 +246,37 @@ def visualize_augmentation_examples(generator, n: int = 5):
     print(f"[SAVED] {path}")
 
 # =====================================================================
-# 7. MAIN TEST
+# 7. PDF REPORT BUILDER
+# =====================================================================
+def build_pdf_report():
+    """
+    Combines all generated .png plots into a single PDF summary.
+    """
+    pdf_path = os.path.join(RESULTS_DIR, "Data_Report.pdf")
+    with PdfPages(pdf_path) as pdf:
+        for img_file in sorted(os.listdir(RESULTS_DIR)):
+            if img_file.endswith(".png"):
+                img_path = os.path.join(RESULTS_DIR, img_file)
+                fig = plt.figure(figsize=(8, 6))
+                plt.imshow(plt.imread(img_path))
+                plt.axis("off")
+                plt.title(img_file.replace("_", " ").replace(".png", ""), fontsize=12)
+                pdf.savefig(fig)
+                plt.close(fig)
+    print(f"📄 [REPORT SAVED] {pdf_path}")
+
+# =====================================================================
+# 8. MAIN TEST
 # =====================================================================
 if __name__ == "__main__":
     DATA_DIR = "Dataset_BUSI_with_GT"
 
     train_df, val_df, test_df = prepare_data_frames(DATA_DIR, balance=True)
 
-    plot_class_distribution(train_df, "Train")
-    plot_class_distribution(val_df, "Validation")
-    plot_class_distribution(test_df, "Test")
-
-    visualize_sample_images(train_df)
     plot_image_resolution_check(train_df)
+    visualize_sample_images(train_df)
 
     gen = MedicalDataGenerator(train_df, augment=True)
     visualize_augmentation_examples(gen)
+
+    build_pdf_report()
