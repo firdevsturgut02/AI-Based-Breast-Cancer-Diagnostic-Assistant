@@ -1,14 +1,20 @@
 """
 evaluator.py
 -------------
-Comprehensive evaluation script for breast ultrasound classification.
-Fix: Added custom_objects to handle 'Mean' layer errors in Keras 3.
+Final Performance Evaluation and Clinical Interpretability Module.
+Technical Features:
+✅ Hardware Utilization Report (GPU/CPU)
+✅ Inference Latency & Throughput (FPS) Analysis
+✅ Keras 3 Custom Object Handling ('Mean', 'Amax')
+✅ Publication-Ready Visuals: Confusion Matrix, ROC, Grad-CAM
+✅ Model Source: results/trainer/models/best_model.h5
 """
 
 # =====================================================================
 # 1. IMPORTS
 # =====================================================================
 import os
+import time
 import json
 import cv2
 import numpy as np
@@ -16,28 +22,70 @@ import pandas as pd
 import tensorflow as tf
 import seaborn as sns
 import matplotlib.pyplot as plt
-
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 from sklearn.model_selection import train_test_split
-from itertools import cycle
+from keras import ops
 
 # =====================================================================
-# 2. PATHS & DIRECTORIES
+# 2. PATHS & CONFIGURATION
 # =====================================================================
 DATA_DIR = "Dataset_BUSI_with_GT"
-# Sync with trainer.py output path
-MODEL_PATH = os.path.join("results", "trainer", "models", "best_model_cbam.h5")
+# Trainer modülü tarafından kaydedilen en iyi model
+MODEL_PATH = os.path.join("results", "trainer", "models", "best_model.h5")
 
+# Çıktıların kaydedileceği özel klasör
 EVAL_OUT_DIR = os.path.join("results", "evaluator")
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 # =====================================================================
-# 3. DATA PREPARATION
+# 3. HARDWARE & DEVICE ANALYSIS
+# =====================================================================
+print("\n🖥️ Hardware Analysis...")
+gpu_devices = tf.config.list_physical_devices('GPU')
+device_name = tf.test.gpu_device_name() if gpu_devices else "CPU"
+print(f"📍 Execution Device: {device_name}")
+
+# =====================================================================
+# 4. LOAD MODEL WITH CUSTOM OBJECTS
+# =====================================================================
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(f"❌ Model not found at {MODEL_PATH}. Please run trainer.py first.")
+
+print("🔍 Loading model and handling Keras 3 custom objects...")
+# Keras 3 'ops' fonksiyonlarını model yükleme sırasında tanıtıyoruz
+custom_objects = {"Mean": ops.mean, "Amax": ops.amax}
+
+with tf.keras.utils.custom_object_scope(custom_objects):
+    model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+print(f"✅ Model successfully loaded from: {MODEL_PATH}")
+
+# =====================================================================
+# 5. INFERENCE TIME ANALYSIS
+# =====================================================================
+def measure_performance(model, iterations=100):
+    print(f"⏱️ Measuring inference time over {iterations} iterations...")
+    dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
+    
+    # Warm-up (İlk çalıştırma yükü)
+    for _ in range(10): _ = model.predict(dummy_input, verbose=0)
+    
+    start_time = time.time()
+    for _ in range(iterations):
+        _ = model.predict(dummy_input, verbose=0)
+    end_time = time.time()
+    
+    avg_latency = ((end_time - start_time) / iterations) * 1000 # ms
+    fps = 1.0 / (avg_latency / 1000)
+    return avg_latency, fps
+
+latency, fps = measure_performance(model)
+print(f"🚀 Average Latency: {latency:.2f} ms | Throughput: {fps:.2f} FPS")
+
+# =====================================================================
+# 6. DATA PREPARATION (TEST SET)
 # =====================================================================
 data_paths, labels = [], []
-
 for folder in os.listdir(DATA_DIR):
     folder_path = os.path.join(DATA_DIR, folder)
     if os.path.isdir(folder_path):
@@ -47,152 +95,99 @@ for folder in os.listdir(DATA_DIR):
                 labels.append(folder)
 
 df = pd.DataFrame({"Path": data_paths, "Label": labels})
+_, temp_df = train_test_split(df, test_size=0.2, stratify=df["Label"], random_state=123)
+_, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df["Label"], random_state=123)
 
-_, temp_df = train_test_split(
-    df, test_size=0.2, stratify=df["Label"], random_state=123
-)
-val_df, test_df = train_test_split(
-    temp_df, test_size=0.5, stratify=temp_df["Label"], random_state=123
-)
-
-# =====================================================================
-# 4. DATA GENERATOR
-# =====================================================================
 datagen = ImageDataGenerator(rescale=1.0 / 255)
-
 test_gen = datagen.flow_from_dataframe(
-    test_df,
-    x_col="Path",
-    y_col="Label",
-    target_size=(256, 256),
-    class_mode="categorical",
-    batch_size=16,
-    shuffle=False
+    test_df, x_col="Path", y_col="Label", target_size=(256, 256),
+    class_mode="categorical", batch_size=1, shuffle=False
 )
-
-class_labels = list(test_gen.class_indices.keys())
-num_classes = len(class_labels)
+class_labels = sorted(test_gen.class_indices.keys())
 
 # =====================================================================
-# 5. LOAD MODEL & PREDICT (FIXED FOR 'MEAN' LAYER ERROR)
+# 7. PERFORMANCE METRICS (CM & ROC)
 # =====================================================================
-if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"❌ Model not found: {MODEL_PATH}")
-
-print("\n🔍 Loading model and handling custom objects...")
-
-# Hata Çözümü: 'Mean' operasyonunu Keras'ın tanıması için custom_objects kullanıyoruz
-from keras import ops
-custom_objects = {"Mean": ops.mean}
-
-try:
-    with tf.keras.utils.custom_object_scope(custom_objects):
-        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-    print("✅ Model loaded successfully.")
-except Exception as e:
-    print(f"⚠️ Model loading error: {e}")
-    print("Trying alternative loading method...")
-    model = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
-
+print("📊 Generating evaluation metrics...")
 preds = model.predict(test_gen, verbose=1)
 y_pred = np.argmax(preds, axis=1)
 y_true = test_gen.classes
 
-# =====================================================================
-# 6. CLASSIFICATION REPORT
-# =====================================================================
-report = classification_report(
-    y_true, y_pred, target_names=class_labels, output_dict=True
-)
-
-pd.DataFrame(report).transpose().to_csv(
-    os.path.join(EVAL_OUT_DIR, "classification_report.csv")
-)
-
-# =====================================================================
-# 7. CONFUSION MATRIX (NORMALIZED)
-# =====================================================================
+# Confusion Matrix
+plt.figure(figsize=(8, 6))
 cm = confusion_matrix(y_true, y_pred)
-cm_normalized = cm.astype("float") / cm.sum(axis=1, keepdims=True)
-
-plt.figure(figsize=(7, 6))
-sns.heatmap(
-    cm_normalized, annot=True, fmt=".2f", cmap="Blues",
-    xticklabels=class_labels, yticklabels=class_labels
-)
-plt.title("Normalized Confusion Matrix")
-plt.xlabel("Predicted Label")
-plt.ylabel("True Label")
-plt.tight_layout()
-plt.savefig(os.path.join(EVAL_OUT_DIR, "confusion_matrix_normalized.png"), dpi=300)
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_labels, yticklabels=class_labels)
+plt.title("Confusion Matrix: Test Set", fontsize=14, fontweight='bold')
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.savefig(os.path.join(EVAL_OUT_DIR, "confusion_matrix.png"), dpi=300)
 plt.close()
 
-# =====================================================================
-# 8. ROC CURVES
-# =====================================================================
-y_true_bin = label_binarize(y_true, classes=range(num_classes))
-plt.figure(figsize=(8, 7))
-for i in range(num_classes):
+# ROC Curves
+plt.figure(figsize=(9, 7))
+y_true_bin = label_binarize(y_true, classes=range(len(class_labels)))
+for i, label in enumerate(class_labels):
     fpr, tpr, _ = roc_curve(y_true_bin[:, i], preds[:, i])
-    plt.plot(fpr, tpr, label=f"{class_labels[i]} (AUC = {auc(fpr, tpr):.2f})")
+    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})', lw=2)
 
-plt.plot([0, 1], [0, 1], "k--")
+plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+plt.title("Multi-Class ROC Analysis", fontsize=14, fontweight='bold')
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
-plt.title("Multi-class ROC Curves")
 plt.legend(loc="lower right")
-plt.tight_layout()
-plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_curves.png"), dpi=300)
+plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300)
 plt.close()
 
 # =====================================================================
-# 9. GRAD-CAM (Visual Interpretability)
+# 8. GRAD-CAM (Explainable AI)
 # =====================================================================
-def generate_gradcam(model, img_array, layer_name):
-    grad_model = tf.keras.models.Model(
-        [model.inputs],
-        [model.get_layer(layer_name).output, model.output]
-    )
+[Image of Grad-CAM visualization on medical image]
+def get_gradcam(model, img_array):
+    # Son konvolüsyon katmanını otomatik bul
+    last_conv_layer = next(l for l in reversed(model.layers) if isinstance(l, tf.keras.layers.Conv2D))
+    grad_model = tf.keras.models.Model([model.inputs], [last_conv_layer.output, model.output])
+    
     with tf.GradientTape() as tape:
-        conv_out, predictions = grad_model(img_array)
-        class_idx = tf.argmax(predictions[0])
-        loss = predictions[:, class_idx]
+        conv_outputs, predictions = grad_model(img_array)
+        loss = predictions[:, np.argmax(predictions[0])]
 
-    grads = tape.gradient(loss, conv_out)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    heatmap = tf.reduce_mean(conv_out * pooled_grads, axis=-1)
-    heatmap = np.maximum(heatmap[0], 0)
-    heatmap /= np.max(heatmap) + 1e-8
-    return heatmap
+    grads = tape.gradient(loss, conv_outputs)[0]
+    output = conv_outputs[0]
+    weights = tf.reduce_mean(grads, axis=(0, 1))
+    cam = tf.reduce_sum(tf.multiply(weights, output), axis=-1)
+    
+    cam = np.maximum(cam, 0)
+    cam = cam / (np.max(cam) + 1e-10)
+    return cam
 
-def overlay_gradcam(img_path, heatmap, alpha=0.4):
-    img = cv2.imread(img_path)
-    img = cv2.resize(img, (256, 256))
-    heatmap = cv2.resize(heatmap, (256, 256))
-    heatmap = np.uint8(255 * heatmap)
-    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-    return cv2.addWeighted(heatmap, alpha, img, 1 - alpha, 0)
+# Rastgele bir test örneği üzerinde görselleştirme
+sample_idx = np.random.randint(len(test_df))
+sample_path = test_df.iloc[sample_idx]["Path"]
+img = tf.keras.preprocessing.image.load_img(sample_path, target_size=(256, 256))
+img_arr = tf.keras.preprocessing.image.img_to_array(img) / 255.0
+heatmap = get_gradcam(model, np.expand_dims(img_arr, axis=0))
 
-try:
-    sample_path = test_df.sample(1, random_state=42)["Path"].values[0]
-    img = tf.keras.preprocessing.image.load_img(sample_path, target_size=(256, 256))
-    img_array = tf.keras.preprocessing.image.img_to_array(img) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
+heatmap_res = cv2.resize(heatmap, (256, 256))
+heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_res), cv2.COLORMAP_JET)
+superimposed = cv2.addWeighted(np.uint8(255 * img_arr), 0.6, heatmap_color, 0.4, 0)
 
-    # Find last conv layer automatically
-    target_layer = next(l.name for l in reversed(model.layers) if isinstance(l, tf.keras.layers.Conv2D))
+cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_explanation.png"), cv2.cvtColor(superimposed, cv2.COLOR_RGB2BGR))
 
-    heatmap = generate_gradcam(model, img_array, layer_name=target_layer)
-    gradcam_img = overlay_gradcam(sample_path, heatmap)
+# =====================================================================
+# 9. TECHNICAL REPORT EXPORT
+# =====================================================================
+tech_summary = {
+    "Model_Path": MODEL_PATH,
+    "Hardware_Device": device_name,
+    "Inference_Latency_ms": round(latency, 2),
+    "Throughput_FPS": round(fps, 2),
+    "Test_Samples": len(test_df),
+    "TF_Version": tf.__version__
+}
 
-    plt.figure(figsize=(6, 6))
-    plt.imshow(cv2.cvtColor(gradcam_img, cv2.COLOR_BGR2RGB))
-    plt.axis("off")
-    plt.savefig(os.path.join(EVAL_OUT_DIR, "gradcam_sample.png"), dpi=300)
-    plt.close()
-    print(f"🖼️ Grad-CAM saved to {EVAL_OUT_DIR}/gradcam_sample.png")
-except Exception as e:
-    print(f"⚠️ Grad-CAM failed: {e}")
+with open(os.path.join(EVAL_OUT_DIR, "technical_performance.json"), "w") as f:
+    json.dump(tech_summary, f, indent=4)
 
-print("\n✅ Evaluation complete.")
-print(f"📁 Results saved in: {EVAL_OUT_DIR}/")
+print(f"\n✅ Evaluation complete.")
+print(f"📊 Latency: {latency:.2f} ms | FPS: {fps:.2f}")
+print(f"📁 Reports saved in: {EVAL_OUT_DIR}/")
