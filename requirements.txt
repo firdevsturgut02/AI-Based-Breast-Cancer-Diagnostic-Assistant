@@ -28,7 +28,7 @@ groq
 # Compatibility Fixes (for TensorFlow + JAX conflict)
 jax==0.4.30
 jaxlib==0.4.30
-ml_dtypes==0.5.0
+ml-dtypes==0.5.0
 
 # Miscellaneous Utilities
 protobuf==4.25.3
