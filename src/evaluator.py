@@ -21,43 +21,50 @@ EVAL_OUT_DIR = os.path.join("results", "evaluator")
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 # =====================================================================
-# MODEL LOADING (FIXED FOR KERAS 3 CUSTOM OBJECTS)
+# MODEL LOADING (FIXED FOR KERAS 3 SERIALIZATION)
 # =====================================================================
 print("\n🔍 Loading model and handling Keras 3 custom objects...")
 
-# Hatayı çözmek için operasyonları açık fonksiyonlar olarak tanımlıyoruz
-def keras_mean(x, **kwargs):
+# Keras 3'ün Mean ve Amax fonksiyonlarını 'wrap' ederek yüklüyoruz.
+# Bu yapı, Keras'ın fonksiyonu 'x' argümanı olmadan çağırmasını engeller.
+@tf.keras.utils.register_keras_serializable(package="Custom")
+def Mean(x, **kwargs):
     return ops.mean(x, **kwargs)
 
-def keras_amax(x, **kwargs):
+@tf.keras.utils.register_keras_serializable(package="Custom")
+def Amax(x, **kwargs):
     return ops.amax(x, **kwargs)
 
 custom_objects = {
-    "Mean": keras_mean,
-    "Amax": keras_amax
+    "Mean": Mean,
+    "Amax": Amax
 }
 
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"❌ Model dosyası bulunamadı: {MODEL_PATH}")
 
-# compile=False kullanmak yükleme sırasındaki katman hatalarını önler
-with tf.keras.utils.custom_object_scope(custom_objects):
-    model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-
-print("✅ Model başarıyla yüklendi.")
+try:
+    # custom_object_scope kullanarak yükleme
+    with tf.keras.utils.custom_object_scope(custom_objects):
+        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+    print("✅ Model başarıyla yüklendi.")
+except Exception as e:
+    print(f"⚠️ Hata: {e}")
+    print("💡 Alternatif yükleme deneniyor (Direct map)...")
+    model = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
 
 # =====================================================================
-# HARDWARE & PERFORMANCE ANALYSIS
+# HARDWARE & PERFORMANCE REPORT
 # =====================================================================
 gpu_devices = tf.config.list_physical_devices('GPU')
 device_name = "/device:GPU:0" if gpu_devices else "CPU"
 
-# Inference hızı ölçümü
+# Çıkarım hızı ölçümü
 dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
-for _ in range(10): _ = model.predict(dummy_input, verbose=0) # Warm-up
+for _ in range(5): _ = model.predict(dummy_input, verbose=0)
 start = time.time()
-for _ in range(100): _ = model.predict(dummy_input, verbose=0)
-latency = ((time.time() - start) / 100) * 1000
+for _ in range(50): _ = model.predict(dummy_input, verbose=0)
+latency = ((time.time() - start) / 50) * 1000
 fps = 1000 / latency
 
 # =====================================================================
@@ -84,37 +91,32 @@ test_gen = ImageDataGenerator(rescale=1./255).flow_from_dataframe(
 class_names = sorted(test_gen.class_indices.keys())
 
 # =====================================================================
-# RESULTS & PLOTS
+# METRICS & PLOTS
 # =====================================================================
-print("🧪 Test seti üzerinde değerlendirme yapılıyor...")
+print("🧪 Test seti değerlendiriliyor...")
 preds = model.predict(test_gen, verbose=1)
 y_pred = np.argmax(preds, axis=1)
 y_true = test_gen.classes
 
-# 1. Confusion Matrix
-
+# Confusion Matrix
 plt.figure(figsize=(8, 6))
 sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt="d", cmap="Blues", 
             xticklabels=class_names, yticklabels=class_names)
-plt.title("Karmaşıklık Matrisi (Confusion Matrix)")
+plt.title("Karmaşıklık Matrisi")
 plt.savefig(os.path.join(EVAL_OUT_DIR, "confusion_matrix.png"), dpi=300)
 plt.close()
 
-# 2. ROC Analysis
+# ROC Analysis
 
 plt.figure(figsize=(9, 7))
 y_true_bin = label_binarize(y_true, classes=range(len(class_names)))
 for i, label in enumerate(class_names):
     fpr, tpr, _ = roc_curve(y_true_bin[:, i], preds[:, i])
-    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})', lw=2)
+    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})')
 plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
-plt.legend()
-plt.title("ROC Eğrileri")
-plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300)
-plt.close()
+plt.legend(); plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300); plt.close()
 
-# 3. Grad-CAM (Klinik Açıklanabilirlik)
-
+# Grad-CAM
 def get_gradcam(model, img_array):
     last_conv_layer = next(l for l in reversed(model.layers) if isinstance(l, tf.keras.layers.Conv2D))
     grad_model = tf.keras.models.Model([model.inputs], [last_conv_layer.output, model.output])
@@ -127,22 +129,22 @@ def get_gradcam(model, img_array):
     cam = np.maximum(cam, 0)
     return cam / (np.max(cam) + 1e-10)
 
-sample_idx = 0
-img_arr = tf.keras.preprocessing.image.img_to_array(tf.keras.preprocessing.image.load_img(test_df.iloc[sample_idx]["Path"], target_size=(256, 256))) / 255.0
+sample_idx = np.random.randint(len(test_df))
+img_path = test_df.iloc[sample_idx]["Path"]
+img_arr = tf.keras.preprocessing.image.img_to_array(tf.keras.preprocessing.image.load_img(img_path, target_size=(256, 256))) / 255.0
 cam = get_gradcam(model, np.expand_dims(img_arr, axis=0))
 heatmap = cv2.applyColorMap(np.uint8(255 * cv2.resize(cam, (256, 256))), cv2.COLORMAP_JET)
 res = cv2.addWeighted(np.uint8(255 * img_arr), 0.6, heatmap, 0.4, 0)
-cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_explanation.png"), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
+cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_sample.png"), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
 
-# 4. Teknik Performans Özeti
+# Technical Summary
 tech_report = {
-    "Best_Model_Path": MODEL_PATH,
     "Device": device_name,
     "Latency_ms": round(latency, 2),
     "Throughput_FPS": round(fps, 2),
     "Test_Accuracy": float(np.mean(y_true == y_pred))
 }
-with open(os.path.join(EVAL_OUT_DIR, "performance_summary.json"), "w") as f:
+with open(os.path.join(EVAL_OUT_DIR, "performance.json"), "w") as f:
     json.dump(tech_report, f, indent=4)
 
-print(f"\n✅ Evaluator tamamlandı. Çıktılar: {EVAL_OUT_DIR}/")
+print(f"\n✅ Tüm işlemler tamamlandı. Sonuçlar: {EVAL_OUT_DIR}/")
