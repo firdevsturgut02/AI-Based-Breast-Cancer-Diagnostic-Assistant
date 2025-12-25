@@ -1,3 +1,13 @@
+"""
+evaluator.py
+-------------
+Final Performance Evaluation and Clinical Interpretability Module.
+✅ Hardware Analysis (GPU/CPU)
+✅ Inference Latency & FPS Calculation
+✅ Multi-class Confusion Matrix & ROC Curves
+✅ Clinical Explainability with Grad-CAM
+"""
+
 import os
 import time
 import json
@@ -9,51 +19,59 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 from sklearn.model_selection import train_test_split
-from model_factory import get_model # Mimarinin temiz kurulumu için
+
+# Import the architecture from our factory
+from model_factory import get_model
 
 # =====================================================================
-# 1. PATHS & CONFIG
+# 1. PATHS & CONFIGURATION
 # =====================================================================
 DATA_DIR = "Dataset_BUSI_with_GT"
+# This points to the best model saved by trainer.py
 MODEL_WEIGHTS_PATH = os.path.join("results", "trainer", "models", "best_model.h5")
 EVAL_OUT_DIR = os.path.join("results", "evaluator")
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 # =====================================================================
-# 2. MODEL LOADING (SAFE METHOD)
+# 2. HARDWARE & MODEL LOADING
 # =====================================================================
-print("\n🔍 Model mimarisi oluşturuluyor ve ağırlıklar yükleniyor...")
-
-# Hata almamak için önce sıfır model kuruyoruz, sonra eğitilmiş ağırlıkları basıyoruz
-model = get_model(num_classes=3, export_summary=False)
-
-if not os.path.exists(MODEL_WEIGHTS_PATH):
-    raise FileNotFoundError(f"❌ Model dosyası bulunamadı: {MODEL_WEIGHTS_PATH}")
-
-try:
-    # Sadece ağırlıkları yüklemek, Keras 3'teki 'Mean' hatasını %100 bypass eder
-    model.load_weights(MODEL_WEIGHTS_PATH)
-    print("✅ Ağırlıklar başarıyla yüklendi.")
-except Exception as e:
-    print(f"⚠️ Ağırlık yükleme hatası, alternatif deneniyor: {e}")
-    model = tf.keras.models.load_model(MODEL_WEIGHTS_PATH, compile=False, safe_mode=False)
-
-# =====================================================================
-# 3. PERFORMANCE & HARDWARE REPORT
-# =====================================================================
+print("\n🖥️ Analyzing Hardware...")
 gpu_devices = tf.config.list_physical_devices('GPU')
 device_name = "/device:GPU:0" if gpu_devices else "CPU"
+print(f"📍 Execution Device: {device_name}")
 
-# Inference hızı ölçümü
-dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
-for _ in range(5): _ = model.predict(dummy_input, verbose=0)
-start = time.time()
-for _ in range(50): _ = model.predict(dummy_input, verbose=0)
-latency = ((time.time() - start) / 50) * 1000
-fps = 1000 / latency
+print("\n🏗️ Building Model Architecture and Loading Best Weights...")
+# Rebuild the empty architecture
+model = get_model(num_classes=3) 
+
+if not os.path.exists(MODEL_WEIGHTS_PATH):
+    raise FileNotFoundError(f"❌ Best model weights not found at: {MODEL_WEIGHTS_PATH}")
+
+# Load weights into the architecture (Bypasses Keras 3 serialization errors)
+model.load_weights(MODEL_WEIGHTS_PATH)
+print(f"✅ Successfully loaded weights from: {MODEL_WEIGHTS_PATH}")
 
 # =====================================================================
-# 4. DATA PREPARATION
+# 3. INFERENCE PERFORMANCE ANALYSIS
+# =====================================================================
+def measure_latency(model, iterations=50):
+    dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
+    # Warm-up the engine
+    for _ in range(5): _ = model.predict(dummy_input, verbose=0)
+    
+    start_time = time.time()
+    for _ in range(iterations):
+        _ = model.predict(dummy_input, verbose=0)
+    
+    avg_latency = ((time.time() - start_time) / iterations) * 1000 # in ms
+    fps = 1000.0 / avg_latency
+    return avg_latency, fps
+
+latency, fps = measure_latency(model)
+print(f"🚀 Performance: {latency:.2f} ms per image | Throughput: {fps:.2f} FPS")
+
+# =====================================================================
+# 4. DATA PREPARATION (TEST SET)
 # =====================================================================
 data_paths, labels = [], []
 for folder in os.listdir(DATA_DIR):
@@ -65,6 +83,7 @@ for folder in os.listdir(DATA_DIR):
                 labels.append(folder)
 
 df = pd.DataFrame({"Path": data_paths, "Label": labels})
+# Stratified split to match training conditions
 _, temp_df = train_test_split(df, test_size=0.2, stratify=df["Label"], random_state=123)
 _, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df["Label"], random_state=123)
 
@@ -76,31 +95,43 @@ test_gen = ImageDataGenerator(rescale=1./255).flow_from_dataframe(
 class_names = sorted(test_gen.class_indices.keys())
 
 # =====================================================================
-# 5. EVALUATION & VISUALS
+# 5. SCIENTIFIC VISUALIZATION
 # =====================================================================
-print("🧪 Test seti değerlendiriliyor...")
+print("🧪 Generating Predictions and Metrics...")
 preds = model.predict(test_gen, verbose=1)
 y_pred = np.argmax(preds, axis=1)
 y_true = test_gen.classes
 
-# Confusion Matrix
+# --- Confusion Matrix ---
+
 plt.figure(figsize=(8, 6))
-sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt="d", cmap="Blues", 
-            xticklabels=class_names, yticklabels=class_names)
-plt.title("Confusion Matrix (Test Set)")
+cm = confusion_matrix(y_true, y_pred)
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_names, yticklabels=class_names)
+plt.title("Confusion Matrix: Test Set Performance", fontsize=14, fontweight='bold')
+plt.xlabel("Predicted Class")
+plt.ylabel("Actual Class")
 plt.savefig(os.path.join(EVAL_OUT_DIR, "confusion_matrix.png"), dpi=300)
 plt.close()
 
-# ROC Curves
+# --- ROC Curves ---
+
 plt.figure(figsize=(9, 7))
 for i, label in enumerate(class_names):
     fpr, tpr, _ = roc_curve((y_true == i).astype(int), preds[:, i])
-    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})')
-plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
-plt.legend(); plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300); plt.close()
+    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})', lw=2)
 
-# Grad-CAM
-def get_gradcam(model, img_array):
+plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+plt.title("Multi-Class ROC Analysis", fontsize=14, fontweight='bold')
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.legend(loc="lower right")
+plt.grid(True, alpha=0.2)
+plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300)
+plt.close()
+
+# --- Grad-CAM Explainability ---
+
+def generate_gradcam(model, img_array):
     last_conv_layer = next(l for l in reversed(model.layers) if isinstance(l, tf.keras.layers.Conv2D))
     grad_model = tf.keras.models.Model([model.inputs], [last_conv_layer.output, model.output])
     with tf.GradientTape() as tape:
@@ -112,22 +143,30 @@ def get_gradcam(model, img_array):
     cam = np.maximum(cam, 0)
     return cam / (np.max(cam) + 1e-10)
 
+# Save one Grad-CAM sample for the paper
 sample_idx = np.random.randint(len(test_df))
 img_path = test_df.iloc[sample_idx]["Path"]
-img_arr = tf.keras.preprocessing.image.img_to_array(tf.keras.preprocessing.image.load_img(img_path, target_size=(256, 256))) / 255.0
-cam = get_gradcam(model, np.expand_dims(img_arr, axis=0))
+img_raw = cv2.imread(img_path)
+img_rgb = cv2.cvtColor(img_raw, cv2.COLOR_BGR2RGB)
+img_resized = cv2.resize(img_rgb, (256, 256))
+cam = generate_gradcam(model, np.expand_dims(img_resized/255.0, axis=0))
 heatmap = cv2.applyColorMap(np.uint8(255 * cv2.resize(cam, (256, 256))), cv2.COLORMAP_JET)
-res = cv2.addWeighted(np.uint8(255 * img_arr), 0.6, heatmap, 0.4, 0)
-cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_explanation.png"), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
+overlay = cv2.addWeighted(np.uint8(255 * (img_resized/255.0)), 0.6, heatmap, 0.4, 0)
+cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_explanation.png"), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
-# Technical Summary
-tech_report = {
+# =====================================================================
+# 6. EXPORT PERFORMANCE SUMMARY
+# =====================================================================
+report = {
     "Device": device_name,
-    "Latency_ms": round(latency, 2),
-    "FPS": round(fps, 2),
-    "Test_Accuracy": float(np.mean(y_true == y_pred))
+    "Inference_Latency_ms": round(latency, 2),
+    "Throughput_FPS": round(fps, 2),
+    "Overall_Test_Accuracy": float(np.mean(y_true == y_pred))
 }
-with open(os.path.join(EVAL_OUT_DIR, "performance.json"), "w") as f:
-    json.dump(tech_report, f, indent=4)
 
-print(f"\n✅ Evaluator tamamlandı. Sonuçlar: {EVAL_OUT_DIR}/")
+with open(os.path.join(EVAL_OUT_DIR, "performance_report.json"), "w") as f:
+    json.dump(report, f, indent=4)
+
+print(f"\n✅ Evaluation Complete.")
+print(f"📊 Test Accuracy: {report['Overall_Test_Accuracy']*100:.2f}%")
+print(f"📁 Scientific Artifacts saved in: {EVAL_OUT_DIR}/")
