@@ -21,11 +21,11 @@ EVAL_OUT_DIR = os.path.join("results", "evaluator")
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 # =====================================================================
-# MODEL LOADING (FIXED FOR KERAS 3)
+# MODEL LOADING (FIXED FOR KERAS 3 CUSTOM OBJECTS)
 # =====================================================================
 print("\n🔍 Loading model and handling Keras 3 custom objects...")
 
-# Lambda yerine doğrudan ops fonksiyonlarını veya wrapper fonksiyonları kullanıyoruz
+# Hatayı çözmek için operasyonları açık fonksiyonlar olarak tanımlıyoruz
 def keras_mean(x, **kwargs):
     return ops.mean(x, **kwargs)
 
@@ -40,21 +40,21 @@ custom_objects = {
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"❌ Model dosyası bulunamadı: {MODEL_PATH}")
 
-# compile=False ile yüklemek özel katmanlardaki 'x' argümanı hatasını genellikle çözer
+# compile=False kullanmak yükleme sırasındaki katman hatalarını önler
 with tf.keras.utils.custom_object_scope(custom_objects):
     model = tf.keras.models.load_model(MODEL_PATH, compile=False)
 
 print("✅ Model başarıyla yüklendi.")
 
 # =====================================================================
-# HARDWARE & PERFORMANCE REPORT
+# HARDWARE & PERFORMANCE ANALYSIS
 # =====================================================================
 gpu_devices = tf.config.list_physical_devices('GPU')
 device_name = "/device:GPU:0" if gpu_devices else "CPU"
 
-# Çıkarım hızı ölçümü
+# Inference hızı ölçümü
 dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
-for _ in range(10): _ = model.predict(dummy_input, verbose=0)
+for _ in range(10): _ = model.predict(dummy_input, verbose=0) # Warm-up
 start = time.time()
 for _ in range(100): _ = model.predict(dummy_input, verbose=0)
 latency = ((time.time() - start) / 100) * 1000
@@ -91,26 +91,30 @@ preds = model.predict(test_gen, verbose=1)
 y_pred = np.argmax(preds, axis=1)
 y_true = test_gen.classes
 
-# Confusion Matrix
+# 1. Confusion Matrix
+
 plt.figure(figsize=(8, 6))
 sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt="d", cmap="Blues", 
             xticklabels=class_names, yticklabels=class_names)
-plt.title("Test Seti - Karmaşıklık Matrisi")
+plt.title("Karmaşıklık Matrisi (Confusion Matrix)")
 plt.savefig(os.path.join(EVAL_OUT_DIR, "confusion_matrix.png"), dpi=300)
 plt.close()
 
-# ROC Analysis
+# 2. ROC Analysis
+
 plt.figure(figsize=(9, 7))
 y_true_bin = label_binarize(y_true, classes=range(len(class_names)))
 for i, label in enumerate(class_names):
     fpr, tpr, _ = roc_curve(y_true_bin[:, i], preds[:, i])
-    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})')
-plt.plot([0, 1], [0, 1], 'k--')
+    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})', lw=2)
+plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
 plt.legend()
+plt.title("ROC Eğrileri")
 plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300)
 plt.close()
 
-# Grad-CAM (Örnek Görselleştirme)
+# 3. Grad-CAM (Klinik Açıklanabilirlik)
+
 def get_gradcam(model, img_array):
     last_conv_layer = next(l for l in reversed(model.layers) if isinstance(l, tf.keras.layers.Conv2D))
     grad_model = tf.keras.models.Model([model.inputs], [last_conv_layer.output, model.output])
@@ -130,7 +134,7 @@ heatmap = cv2.applyColorMap(np.uint8(255 * cv2.resize(cam, (256, 256))), cv2.COL
 res = cv2.addWeighted(np.uint8(255 * img_arr), 0.6, heatmap, 0.4, 0)
 cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_explanation.png"), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
 
-# Donanım ve Performans Özeti
+# 4. Teknik Performans Özeti
 tech_report = {
     "Best_Model_Path": MODEL_PATH,
     "Device": device_name,
@@ -141,4 +145,4 @@ tech_report = {
 with open(os.path.join(EVAL_OUT_DIR, "performance_summary.json"), "w") as f:
     json.dump(tech_report, f, indent=4)
 
-print(f"\n✅ Tüm analizler tamamlandı. Sonuçlar: {EVAL_OUT_DIR}/")
+print(f"\n✅ Evaluator tamamlandı. Çıktılar: {EVAL_OUT_DIR}/")
