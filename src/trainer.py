@@ -2,14 +2,9 @@
 trainer.py
 ----------
 Training pipeline for breast ultrasound image classification.
+Fixed for Keras 3 compatibility and internal path consistency.
 
-This script:
-- Loads dataset
-- Trains selected CNN architecture
-- Performs fine-tuning
-- Saves all models, figures, tables, and logs under results/
-- Produces publication-ready outputs (ROC, CM, Grad-CAM)
-
+Outputs are saved under: results/trainer/
 """
 
 # =====================================================================
@@ -32,8 +27,8 @@ from tensorflow.keras.callbacks import (
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 import seaborn as sns
 
+# Ensure model_factory.py is in the same src folder
 from model_factory import get_model, fine_tune_model
-
 
 # =====================================================================
 # 2. GLOBAL CONFIGURATION
@@ -48,28 +43,25 @@ EPOCHS_STAGE_1 = 25
 EPOCHS_STAGE_2 = 20
 NUM_CLASSES = 3
 
-MODEL_NAME = "densenet_cbam"
-
-
 # =====================================================================
-# 3. DIRECTORY STRUCTURE (ALL OUTPUTS UNDER results/)
+# 3. DIRECTORY STRUCTURE (ALL OUTPUTS UNDER results/trainer/)
 # =====================================================================
 DATA_DIR = "Dataset_BUSI_with_GT"
 
-RESULTS_DIR = "results"
-FIGURES_DIR = os.path.join(RESULTS_DIR, "figures")
-GRADCAM_DIR = os.path.join(RESULTS_DIR, "gradcam")
-MODELS_DIR = os.path.join(RESULTS_DIR, "models")
-TABLES_DIR = os.path.join(RESULTS_DIR, "tables")
+# Base results directory for trainer
+TRAINER_OUT_DIR = os.path.join("results", "trainer")
+FIGURES_DIR = os.path.join(TRAINER_OUT_DIR, "figures")
+MODELS_DIR = os.path.join(TRAINER_OUT_DIR, "models")
+TABLES_DIR = os.path.join(TRAINER_OUT_DIR, "tables")
 LOG_DIR = os.path.join(
-    RESULTS_DIR,
+    TRAINER_OUT_DIR,
     "logs",
     datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 )
 
-for d in [RESULTS_DIR, FIGURES_DIR, GRADCAM_DIR, MODELS_DIR, TABLES_DIR, LOG_DIR]:
+# Create all necessary directories
+for d in [TRAINER_OUT_DIR, FIGURES_DIR, MODELS_DIR, TABLES_DIR, LOG_DIR]:
     os.makedirs(d, exist_ok=True)
-
 
 # =====================================================================
 # 4. DATA GENERATORS
@@ -84,8 +76,7 @@ train_datagen = ImageDataGenerator(
     validation_split=0.2
 )
 
-test_datagen = ImageDataGenerator(rescale=1.0 / 255)
-
+# Validation generator uses the same split from training data
 train_gen = train_datagen.flow_from_directory(
     DATA_DIR,
     target_size=IMG_SIZE,
@@ -104,13 +95,12 @@ val_gen = train_datagen.flow_from_directory(
     seed=SEED
 )
 
-
 # =====================================================================
 # 5. CALLBACKS
 # =====================================================================
 callbacks = [
     ModelCheckpoint(
-        filepath=os.path.join(MODELS_DIR, "best_model.h5"),
+        filepath=os.path.join(MODELS_DIR, "best_model_cbam.h5"),
         monitor="val_auc",
         save_best_only=True,
         mode="max",
@@ -130,21 +120,20 @@ callbacks = [
     TensorBoard(log_dir=LOG_DIR)
 ]
 
-
 # =====================================================================
 # 6. MODEL BUILDING
 # =====================================================================
+# Fixed: Removed 'model_name' argument to match model_factory.get_model() definition
 model = get_model(
-    model_name=MODEL_NAME,
     num_classes=NUM_CLASSES,
     input_shape=(256, 256, 3),
     export_summary=True
 )
 
-
 # =====================================================================
 # 7. STAGE 1 TRAINING (FEATURE EXTRACTION)
 # =====================================================================
+print("\n🚀 Starting Stage 1: Feature Extraction (Backbone Frozen)...")
 history_stage_1 = model.fit(
     train_gen,
     validation_data=val_gen,
@@ -152,10 +141,10 @@ history_stage_1 = model.fit(
     callbacks=callbacks
 )
 
-
 # =====================================================================
 # 8. STAGE 2 TRAINING (FINE-TUNING)
 # =====================================================================
+print("\n🔓 Starting Stage 2: Fine-Tuning (Partial Unfreeze)...")
 model = fine_tune_model(model, num_layers_to_unfreeze=50)
 
 history_stage_2 = model.fit(
@@ -165,8 +154,7 @@ history_stage_2 = model.fit(
     callbacks=callbacks
 )
 
-model.save(os.path.join(MODELS_DIR, "final_model.h5"))
-
+model.save(os.path.join(MODELS_DIR, "final_model_cbam.h5"))
 
 # =====================================================================
 # 9. TRAINING METRICS PLOT
@@ -177,67 +165,81 @@ def plot_training(history1, history2):
     loss = history1.history["loss"] + history2.history["loss"]
     val_loss = history1.history["val_loss"] + history2.history["val_loss"]
 
-    plt.figure(figsize=(10, 4))
+    plt.figure(figsize=(12, 5))
 
     plt.subplot(1, 2, 1)
-    plt.plot(acc)
-    plt.plot(val_acc)
-    plt.title("Accuracy")
-    plt.legend(["Train", "Validation"])
+    plt.plot(acc, label="Train Accuracy", color="blue")
+    plt.plot(val_acc, label="Val Accuracy", color="orange")
+    plt.axvline(x=len(history1.history["accuracy"])-1, color='r', linestyle='--', label='Fine-Tuning Start')
+    plt.title("Model Accuracy")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy")
+    plt.legend()
 
     plt.subplot(1, 2, 2)
-    plt.plot(loss)
-    plt.plot(val_loss)
-    plt.title("Loss")
-    plt.legend(["Train", "Validation"])
+    plt.plot(loss, label="Train Loss", color="blue")
+    plt.plot(val_loss, label="Val Loss", color="orange")
+    plt.axvline(x=len(history1.history["loss"])-1, color='r', linestyle='--', label='Fine-Tuning Start')
+    plt.title("Model Loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(FIGURES_DIR, "training_metrics.jpg"), dpi=300)
+    plt.savefig(os.path.join(FIGURES_DIR, "training_metrics.png"), dpi=300)
     plt.close()
 
+print("📊 Generating training plots...")
 plot_training(history_stage_1, history_stage_2)
-
 
 # =====================================================================
 # 10. CONFUSION MATRIX & ROC
 # =====================================================================
+print("🔍 Evaluating on validation set...")
 val_gen.reset()
 preds = model.predict(val_gen)
 y_pred = np.argmax(preds, axis=1)
 y_true = val_gen.classes
+class_labels = list(val_gen.class_indices.keys())
 
+# Confusion Matrix
 cm = confusion_matrix(y_true, y_pred)
-
-plt.figure(figsize=(6, 5))
-sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_labels, yticklabels=class_labels)
 plt.xlabel("Predicted")
 plt.ylabel("True")
 plt.title("Confusion Matrix")
-plt.savefig(os.path.join(FIGURES_DIR, "confusion_matrix.jpg"), dpi=300)
+plt.savefig(os.path.join(FIGURES_DIR, "confusion_matrix.png"), dpi=300)
 plt.close()
 
-# ROC CURVES
-plt.figure(figsize=(7, 6))
+# ROC Curves
+plt.figure(figsize=(8, 7))
 for i in range(NUM_CLASSES):
     fpr, tpr, _ = roc_curve((y_true == i).astype(int), preds[:, i])
     roc_auc = auc(fpr, tpr)
-    plt.plot(fpr, tpr, label=f"Class {i} (AUC={roc_auc:.2f})")
+    plt.plot(fpr, tpr, label=f"{class_labels[i]} (AUC={roc_auc:.2f})")
 
 plt.plot([0, 1], [0, 1], "k--")
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
-plt.title("ROC Curves")
-plt.legend()
-plt.savefig(os.path.join(FIGURES_DIR, "roc_curves.jpg"), dpi=300)
+plt.title("Receiver Operating Characteristic (ROC) Curves")
+plt.legend(loc="lower right")
+plt.savefig(os.path.join(FIGURES_DIR, "roc_curves.png"), dpi=300)
 plt.close()
-
 
 # =====================================================================
 # 11. METRICS TABLE EXPORT
 # =====================================================================
 metrics_df = pd.DataFrame({
-    "Metric": ["Final Train Accuracy", "Final Validation Accuracy"],
+    "Metric": [
+        "Stage 1 Final Accuracy", 
+        "Stage 1 Final Val Accuracy",
+        "Final Train Accuracy (after FT)", 
+        "Final Validation Accuracy (after FT)"
+    ],
     "Value": [
+        history_stage_1.history["accuracy"][-1],
+        history_stage_1.history["val_accuracy"][-1],
         history_stage_2.history["accuracy"][-1],
         history_stage_2.history["val_accuracy"][-1]
     ]
@@ -249,4 +251,4 @@ metrics_df.to_csv(
 )
 
 print("\n✅ Training completed successfully.")
-print("📁 All results saved under the 'results/' directory.")
+print(f"📁 All outputs (models, plots, tables) saved under: {TRAINER_OUT_DIR}")
