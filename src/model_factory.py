@@ -3,8 +3,8 @@ model_factory.py
 ----------------
 Model builder module for breast ultrasound classification.
 
-Updated Version:
-✅ Compatible with trainer.py (accepts model_name argument)
+Optimized Version:
+✅ Fixed: Keras 3 Compatibility (using keras.ops instead of tf.ops)
 ✅ Uses only the best-performing architecture — DenseNet121 + CBAM
 ✅ Includes CBAM (Convolutional Block Attention Module)
 ✅ Supports fine-tuning
@@ -17,6 +17,7 @@ Updated Version:
 import os
 import time
 import tensorflow as tf
+from keras import ops  # Keras 3 operasyonları için gerekli
 from tensorflow.keras.applications import DenseNet121
 from tensorflow.keras.layers import (
     GlobalAveragePooling2D, Dense, Dropout, BatchNormalization,
@@ -42,7 +43,7 @@ def cbam_block(input_tensor, ratio=8):
 
     # Shared MLP for channel attention
     shared_dense_1 = Dense(channel // ratio, activation='relu', use_bias=False)
-    shared_dense_2 = Dense(channel, activation='sigmoid', use_bias=False)
+    shared_dense_2 = Dense(channel, use_bias=False) # Activation sigmoid sonda eklenecek
 
     # ----- Channel Attention -----
     avg_pool = GlobalAveragePooling2D()(input_tensor)
@@ -58,9 +59,12 @@ def cbam_block(input_tensor, ratio=8):
     channel_refined = Multiply()([input_tensor, channel_attention])
 
     # ----- Spatial Attention -----
-    avg_spatial = tf.reduce_mean(channel_refined, axis=-1, keepdims=True)
-    max_spatial = tf.reduce_max(channel_refined, axis=-1, keepdims=True)
-    concat = tf.concat([avg_spatial, max_spatial], axis=-1)
+    # Keras 3 Uyumu: tf.reduce_mean yerine ops.mean kullanıldı
+    avg_spatial = ops.mean(channel_refined, axis=-1, keepdims=True)
+    # Keras 3 Uyumu: tf.reduce_max yerine ops.amax kullanıldı
+    max_spatial = ops.amax(channel_refined, axis=-1, keepdims=True)
+    # Keras 3 Uyumu: tf.concat yerine ops.concatenate kullanıldı
+    concat = ops.concatenate([avg_spatial, max_spatial], axis=-1)
 
     spatial_attention = Conv2D(
         1, kernel_size=7, padding='same', activation='sigmoid'
@@ -75,7 +79,6 @@ def cbam_block(input_tensor, ratio=8):
 def build_densenet_cbam(num_classes=3, input_shape=(256, 256, 3), weights='imagenet'):
     """
     Builds the DenseNet121 + CBAM attention model.
-    This configuration provides strong feature extraction and attention capability.
     """
     base_model = DenseNet121(
         include_top=False, weights=weights, input_shape=input_shape
@@ -107,8 +110,7 @@ def build_densenet_cbam(num_classes=3, input_shape=(256, 256, 3), weights='image
 # =====================================================================
 def fine_tune_model(model, num_layers_to_unfreeze=50):
     """
-    Enables fine-tuning for the top 'num_layers_to_unfreeze' layers of the base model.
-    Automatically logs fine-tuning configuration to results/fine_tuning_log.txt
+    Enables fine-tuning for the top 'num_layers_to_unfreeze' layers.
     """
     start = time.time()
 
@@ -118,6 +120,7 @@ def fine_tune_model(model, num_layers_to_unfreeze=50):
         if "densenet" in layer.name.lower():
             base_model = layer
             break
+    
     if base_model is None:
         base_model = model
 
@@ -155,7 +158,6 @@ def fine_tune_model(model, num_layers_to_unfreeze=50):
 # 6. MODEL FACTORY ENTRY POINT
 # =====================================================================
 def get_model(
-    model_name="DenseNet121",
     num_classes=3,
     input_shape=(256, 256, 3),
     weights="imagenet",
@@ -163,12 +165,7 @@ def get_model(
 ):
     """
     Builds and returns the DenseNet121 + CBAM model.
-    Compatible with trainer.py calls that pass model_name.
-    Automatically saves model architecture summary to results/model_summary.txt
     """
-    if model_name != "DenseNet121":
-        print(f"⚠️ Warning: '{model_name}' not supported. Using DenseNet121 + CBAM instead.")
-
     model = build_densenet_cbam(
         num_classes=num_classes,
         input_shape=input_shape,
