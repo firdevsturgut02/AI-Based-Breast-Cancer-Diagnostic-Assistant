@@ -3,7 +3,8 @@ model_factory.py
 ----------------
 Model builder module for breast ultrasound classification.
 
-Optimized Version:
+Updated Version:
+✅ Compatible with trainer.py (accepts model_name argument)
 ✅ Uses only the best-performing architecture — DenseNet121 + CBAM
 ✅ Includes CBAM (Convolutional Block Attention Module)
 ✅ Supports fine-tuning
@@ -154,6 +155,7 @@ def fine_tune_model(model, num_layers_to_unfreeze=50):
 # 6. MODEL FACTORY ENTRY POINT
 # =====================================================================
 def get_model(
+    model_name="DenseNet121",
     num_classes=3,
     input_shape=(256, 256, 3),
     weights="imagenet",
@@ -161,8 +163,12 @@ def get_model(
 ):
     """
     Builds and returns the DenseNet121 + CBAM model.
+    Compatible with trainer.py calls that pass model_name.
     Automatically saves model architecture summary to results/model_summary.txt
     """
+    if model_name != "DenseNet121":
+        print(f"⚠️ Warning: '{model_name}' not supported. Using DenseNet121 + CBAM instead.")
+
     model = build_densenet_cbam(
         num_classes=num_classes,
         input_shape=input_shape,
