@@ -1,19 +1,19 @@
 # =====================================================
 # Breast Ultrasound AI - Colab Stable Requirements
-# Compatible with Python 3.12 (2025)
+# (No dependency conflicts ✅)
 # =====================================================
 
-# Core Deep Learning
+# Deep Learning Core
 tensorflow==2.17.0
 
-# ML & Data Science
+# Data Science Stack
 numpy
 pandas
 scikit-learn
 scipy
 tqdm
 
-# Image Processing & Augmentation
+# Image Augmentation & Processing
 opencv-python
 albumentations
 Pillow
@@ -25,10 +25,10 @@ seaborn
 # AI API Integration
 groq
 
-# Compatibility Fixes (For TF Lite & JAX issues)
-ml-dtypes>=0.5.0
-jax>=0.4.30
-jaxlib>=0.4.30
+# Compatibility & TF Lite
+ml-dtypes<0.5.0,>=0.3.1
+jax==0.4.26
+jaxlib==0.4.26
 
-# Miscellaneous Utilities
+# Misc Utilities
 protobuf==4.25.3
