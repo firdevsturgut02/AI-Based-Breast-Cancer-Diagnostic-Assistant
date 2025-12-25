@@ -2,13 +2,13 @@
 trainer.py
 ----------
 Unified Training Pipeline for Breast Ultrasound Classification.
-Optimized for Technical Reports and Academic Standards.
+Optimized for Technical Reports and %90+ Accuracy Target.
 
 Key Features:
-✅ Single-stage 50-epoch training (full network optimization).
-✅ Hardware Performance Metrics (Inference Time & GPU Analysis).
-✅ Automated Results Organization in results/trainer/.
-✅ Comprehensive Visualization: Confusion Matrix, ROC Curves, Accuracy/Loss.
+✅ 50-Epoch Unstoppable Training (Early Stopping Removed).
+✅ Hardware Performance & Inference Latency Metrics.
+✅ High-Resolution Confusion Matrix & ROC Curves.
+✅ Scientific Technical Summary (CSV).
 """
 
 # =====================================================================
@@ -51,25 +51,24 @@ for d in [TRAINER_OUT_DIR, FIGURES_DIR, MODELS_DIR, TABLES_DIR]:
 # =====================================================================
 # 3. DATA PREPARATION
 # =====================================================================
-print("📊 Preparing Dataframes and Analyzing Distribution...")
+print("📊 Analyzing Dataset and Applying Class Balancing...")
 train_df, val_df, test_df = prepare_data_frames(DATA_DIR, seed=SEED, balance=True)
 
-print("⚙️ Initializing Medical Data Generators...")
+print("⚙️ Initializing Scientific Data Generators...")
 train_gen = MedicalDataGenerator(train_df, batch_size=BATCH_SIZE, augment=True)
 val_gen = MedicalDataGenerator(val_df, batch_size=BATCH_SIZE, augment=False)
 
-# =====================================================================
-# 4. HARDWARE & INFERENCE ANALYSIS PRE-TRAIN
-# =====================================================================
+# Hardware Info
 gpu_devices = tf.config.list_physical_devices('GPU')
 device_name = tf.test.gpu_device_name() if gpu_devices else "CPU"
 print(f"📍 Execution Device: {device_name}")
 
 # =====================================================================
-# 5. CALLBACKS
+# 4. CALLBACKS (EarlyStopping Removed)
 # =====================================================================
-model_save_path = os.path.join(MODELS_DIR, "best_model.h5") #
+model_save_path = os.path.join(MODELS_DIR, "best_model.h5")
 callbacks = [
+    # AUC bazlı en iyi modeli kaydet (Her zaman en iyi performansı yakalar)
     tf.keras.callbacks.ModelCheckpoint(
         filepath=model_save_path,
         monitor="val_auc",
@@ -77,12 +76,7 @@ callbacks = [
         mode="max",
         verbose=1
     ),
-    tf.keras.callbacks.EarlyStopping(
-        monitor="val_loss",
-        patience=10, 
-        restore_best_weights=True,
-        verbose=1
-    ),
+    # Hassas ayar (Fine-tuning) için öğrenme oranını otomatik ayarla
     tf.keras.callbacks.ReduceLROnPlateau(
         monitor="val_loss",
         factor=0.2,
@@ -93,12 +87,12 @@ callbacks = [
 ]
 
 # =====================================================================
-# 6. MODEL INITIALIZATION & TRAINING
+# 5. TRAINING SESSION
 # =====================================================================
-print("🏗️ Building DenseNet121 + CBAM Architecture...")
+print("🏗️ Building DenseNet121 + CBAM Model...")
 model = get_model(num_classes=NUM_CLASSES, input_shape=(256, 256, 3))
 
-print(f"🚀 Starting Unified Training Session ({EPOCHS} Epochs)...")
+print(f"🚀 Starting Unified 50-Epoch Training (Target: 90%+ Accuracy)...")
 start_train_time = time.time()
 history = model.fit(
     train_gen,
@@ -110,48 +104,39 @@ history = model.fit(
 total_train_time = time.time() - start_train_time
 
 # =====================================================================
-# 7. INFERENCE TIME ANALYSIS (POST-TRAIN)
+# 6. PERFORMANCE & HARDWARE ANALYSIS
 # =====================================================================
 def measure_inference(model, iterations=100):
     dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
-    # Warm-up
-    for _ in range(10): _ = model.predict(dummy_input, verbose=0)
-    
+    for _ in range(10): _ = model.predict(dummy_input, verbose=0) # Warmup
     start = time.time()
     for _ in range(iterations): _ = model.predict(dummy_input, verbose=0)
-    avg_latency = ((time.time() - start) / iterations) * 1000 # ms
-    return avg_latency
+    return ((time.time() - start) / iterations) * 1000
 
 avg_latency = measure_inference(model)
-print(f"⏱️ Average Inference Latency: {avg_latency:.2f} ms")
+print(f"⏱️ Inference Latency: {avg_latency:.2f} ms")
 
 # =====================================================================
-# 8. VISUALIZATION: ACCURACY & LOSS
+# 7. SCIENTIFIC VISUALIZATION (Accuracy, Loss, CM, ROC)
 # =====================================================================
-def plot_learning_curves(history):
-    plt.figure(figsize=(14, 6))
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['accuracy'], label='Training Accuracy', lw=2)
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy', lw=2)
-    plt.title('Model Accuracy')
-    plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.legend(); plt.grid(True, alpha=0.3)
+# Accuracy & Loss Curves
 
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['loss'], label='Training Loss', lw=2)
-    plt.plot(history.history['val_loss'], label='Validation Loss', lw=2)
-    plt.title('Model Loss')
-    plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.legend(); plt.grid(True, alpha=0.3)
+plt.figure(figsize=(14, 6))
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy', lw=2)
+plt.plot(history.history['val_accuracy'], label='Val Accuracy', lw=2)
+plt.axhline(y=0.90, color='r', linestyle='--', label='90% Target')
+plt.title('Accuracy Evolution')
+plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.legend(); plt.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(FIGURES_DIR, "learning_curves.png"), dpi=300)
-    plt.close()
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss', lw=2)
+plt.plot(history.history['val_loss'], label='Val Loss', lw=2)
+plt.title('Loss Convergence')
+plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.legend(); plt.grid(True, alpha=0.3)
+plt.savefig(os.path.join(FIGURES_DIR, "learning_curves.png"), dpi=300); plt.close()
 
-plot_learning_curves(history)
-
-# =====================================================================
-# 9. PERFORMANCE EVALUATION: CM & ROC
-# =====================================================================
-print("🔍 Performing Post-Training Evaluation...")
+# Evaluate on Validation Set
 y_true, y_scores = [], []
 for i in range(len(val_gen)):
     x, y = val_gen[i]
@@ -164,23 +149,24 @@ y_pred = np.argmax(y_scores, axis=1)
 class_labels = sorted(train_df["Label"].unique())
 
 # Confusion Matrix
+
 plt.figure(figsize=(8, 6))
 sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt="d", cmap="Blues", 
             xticklabels=class_labels, yticklabels=class_labels)
-plt.title("Confusion Matrix")
+plt.title("Confusion Matrix (Validation Set)")
 plt.savefig(os.path.join(FIGURES_DIR, "confusion_matrix.png"), dpi=300); plt.close()
 
-# ROC Curves
+# Multi-class ROC
 plt.figure(figsize=(9, 7))
 for i, label in enumerate(class_labels):
     fpr, tpr, _ = roc_curve((y_true == i).astype(int), y_scores[:, i])
-    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})')
-plt.plot([0, 1], [0, 1], 'k--')
-plt.title("Multi-Class ROC Analysis"); plt.legend(); plt.grid(True, alpha=0.2)
+    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})', lw=2)
+plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+plt.title("Multi-Class ROC Curves"); plt.legend(); plt.grid(True, alpha=0.2)
 plt.savefig(os.path.join(FIGURES_DIR, "roc_analysis.png"), dpi=300); plt.close()
 
 # =====================================================================
-# 10. TECHNICAL SUMMARY EXPORT
+# 8. TECHNICAL SUMMARY EXPORT
 # =====================================================================
 summary_stats = pd.DataFrame({
     "Parameter": ["Best Val Accuracy", "Inference Latency (ms)", "Total Training Time (s)", "Device"],
@@ -188,5 +174,6 @@ summary_stats = pd.DataFrame({
 })
 summary_stats.to_csv(os.path.join(TABLES_DIR, "technical_summary.csv"), index=False)
 
-print(f"\n✅ Training Complete. Model saved to: {model_save_path}")
-print(f"📁 Artifacts saved in: {TRAINER_OUT_DIR}")
+print(f"\n✅ Training Process Complete.")
+print(f"💾 Best Model Saved: {model_save_path}")
+print(f"📁 Scientific Artifacts: {TRAINER_OUT_DIR}")
