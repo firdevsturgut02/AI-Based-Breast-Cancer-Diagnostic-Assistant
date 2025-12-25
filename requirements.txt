@@ -1,34 +1,34 @@
-# ====================================
-# Breast Ultrasound AI - Colab Stable
-# ====================================
+# =====================================================
+# Breast Ultrasound AI - Colab Stable Requirements
+# =====================================================
 
-# TensorFlow & Core DL
+# Core Deep Learning
 tensorflow==2.17.0
 keras==2.17.0
 
-# FIX: TensorFlow Addons Python 3.12 not supported
-# We'll skip direct TFA install and use built-in Keras addons.
-
-# ML & Data
+# ML & Data Science
 numpy
 pandas
 scikit-learn
 scipy
 tqdm
 
+# Image Processing & Augmentation
+opencv-python
+albumentations
+Pillow
+
 # Visualization
 matplotlib
 seaborn
-opencv-python
-Pillow
 
-# Compatibility patches for TF + JAX issue
-ml_dtypes==0.5.0
-jax==0.4.30
-jaxlib==0.4.30
-
-# Groq inference acceleration
+# AI API Integration
 groq
 
-# Misc
+# Compatibility Fixes (for TensorFlow + JAX conflict)
+jax==0.4.30
+jaxlib==0.4.30
+ml_dtypes==0.5.0
+
+# Miscellaneous Utilities
 protobuf==4.25.3
