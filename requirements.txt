@@ -1,22 +1,23 @@
-# Core ML & DL Frameworks
+# Core Deep Learning
 tensorflow==2.17.0
-keras==3.2.0
+tensorflow-addons==0.22.0
+keras==2.17.0
 
-# Data manipulation
-numpy==1.26.4
-pandas==2.2.3
+# Visualization
+matplotlib
+seaborn
+opencv-python
+Pillow
 
-# Visualization & Reporting
-matplotlib==3.9.2
-seaborn==0.13.2
-scikit-learn==1.5.2
+# Data & ML
+numpy
+pandas
+scikit-learn
+scipy
 
-# Image processing
-opencv-python==4.10.0.84
-Pillow==10.4.0
+# Groq integration (for hardware acceleration or API inference)
+groq
 
-# Utilities
-tqdm==4.66.5
+# Others
+tqdm
 protobuf==4.25.3
-h5py==3.11.0
-
