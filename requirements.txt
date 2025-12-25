@@ -26,3 +26,6 @@ groq
 
 # For handling imbalanced datasets or resampling
 imbalanced-learn
+
+python-dotenv
+streamlit
