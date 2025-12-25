@@ -1,13 +1,3 @@
-"""
-evaluator.py
--------------
-Final Performance Evaluation and Clinical Interpretability Module.
-Fixed: TypeError in custom_object loading for Keras 3.
-"""
-
-# =====================================================================
-# 1. IMPORTS
-# =====================================================================
 import os
 import time
 import json
@@ -23,7 +13,7 @@ from sklearn.model_selection import train_test_split
 from keras import ops
 
 # =====================================================================
-# 2. PATHS & CONFIGURATION
+# PATHS
 # =====================================================================
 DATA_DIR = "Dataset_BUSI_with_GT"
 MODEL_PATH = os.path.join("results", "trainer", "models", "best_model.h5")
@@ -31,51 +21,48 @@ EVAL_OUT_DIR = os.path.join("results", "evaluator")
 os.makedirs(EVAL_OUT_DIR, exist_ok=True)
 
 # =====================================================================
-# 3. LOAD MODEL WITH CUSTOM OBJECTS (HATAYI ÇÖZEN KISIM)
+# MODEL LOADING (FIXED FOR KERAS 3)
 # =====================================================================
-if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"❌ Model not found at {MODEL_PATH}")
+print("\n🔍 Loading model and handling Keras 3 custom objects...")
 
-print("🔍 Loading model and handling Keras 3 custom objects...")
+# Lambda yerine doğrudan ops fonksiyonlarını veya wrapper fonksiyonları kullanıyoruz
+def keras_mean(x, **kwargs):
+    return ops.mean(x, **kwargs)
 
-# Keras'ın 'Mean' ve 'Amax'ı doğru çağırması için lambda tanımlıyoruz
+def keras_amax(x, **kwargs):
+    return ops.amax(x, **kwargs)
+
 custom_objects = {
-    "Mean": lambda x, **kwargs: ops.mean(x, **kwargs),
-    "Amax": lambda x, **kwargs: ops.amax(x, **kwargs)
+    "Mean": keras_mean,
+    "Amax": keras_amax
 }
 
-try:
-    # custom_object_scope kullanarak yükleme
-    with tf.keras.utils.custom_object_scope(custom_objects):
-        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-    print("✅ Model successfully loaded.")
-except Exception as e:
-    print(f"⚠️ Initial load failed, trying alternative: {e}")
-    # Alternatif doğrudan yükleme metodu
-    model = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(f"❌ Model dosyası bulunamadı: {MODEL_PATH}")
+
+# compile=False ile yüklemek özel katmanlardaki 'x' argümanı hatasını genellikle çözer
+with tf.keras.utils.custom_object_scope(custom_objects):
+    model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+
+print("✅ Model başarıyla yüklendi.")
 
 # =====================================================================
-# 4. HARDWARE & INFERENCE ANALYSIS
+# HARDWARE & PERFORMANCE REPORT
 # =====================================================================
 gpu_devices = tf.config.list_physical_devices('GPU')
-device_name = tf.test.gpu_device_name() if gpu_devices else "CPU"
+device_name = "/device:GPU:0" if gpu_devices else "CPU"
 
-def measure_performance(model, iterations=50):
-    dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
-    for _ in range(5): _ = model.predict(dummy_input, verbose=0) # Warmup
-    start_time = time.time()
-    for _ in range(iterations):
-        _ = model.predict(dummy_input, verbose=0)
-    avg_latency = ((time.time() - start_time) / iterations) * 1000
-    return avg_latency, 1000.0 / avg_latency
-
-latency, fps = measure_performance(model)
-print(f"🚀 Device: {device_name} | Latency: {latency:.2f} ms | FPS: {fps:.2f}")
+# Çıkarım hızı ölçümü
+dummy_input = np.random.rand(1, 256, 256, 3).astype(np.float32)
+for _ in range(10): _ = model.predict(dummy_input, verbose=0)
+start = time.time()
+for _ in range(100): _ = model.predict(dummy_input, verbose=0)
+latency = ((time.time() - start) / 100) * 1000
+fps = 1000 / latency
 
 # =====================================================================
-# 5. DATA PREPARATION & EVALUATION (CM & ROC)
+# TEST DATA PREPARATION
 # =====================================================================
-# Görüntüleri topla
 data_paths, labels = [], []
 for folder in os.listdir(DATA_DIR):
     folder_path = os.path.join(DATA_DIR, folder)
@@ -90,44 +77,40 @@ _, temp_df = train_test_split(df, test_size=0.2, stratify=df["Label"], random_st
 _, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df["Label"], random_state=123)
 
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-datagen = ImageDataGenerator(rescale=1.0 / 255)
-test_gen = datagen.flow_from_dataframe(
+test_gen = ImageDataGenerator(rescale=1./255).flow_from_dataframe(
     test_df, x_col="Path", y_col="Label", target_size=(256, 256),
     class_mode="categorical", batch_size=1, shuffle=False
 )
-class_labels = sorted(test_gen.class_indices.keys())
+class_names = sorted(test_gen.class_indices.keys())
 
-# Tahminler
+# =====================================================================
+# RESULTS & PLOTS
+# =====================================================================
+print("🧪 Test seti üzerinde değerlendirme yapılıyor...")
 preds = model.predict(test_gen, verbose=1)
 y_pred = np.argmax(preds, axis=1)
 y_true = test_gen.classes
 
 # Confusion Matrix
-
 plt.figure(figsize=(8, 6))
-cm = confusion_matrix(y_true, y_pred)
-sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_labels, yticklabels=class_labels)
-plt.title("Confusion Matrix: Test Set")
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
+sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt="d", cmap="Blues", 
+            xticklabels=class_names, yticklabels=class_names)
+plt.title("Test Seti - Karmaşıklık Matrisi")
 plt.savefig(os.path.join(EVAL_OUT_DIR, "confusion_matrix.png"), dpi=300)
 plt.close()
 
 # ROC Analysis
 plt.figure(figsize=(9, 7))
-y_true_bin = label_binarize(y_true, classes=range(len(class_labels)))
-for i, label in enumerate(class_labels):
+y_true_bin = label_binarize(y_true, classes=range(len(class_names)))
+for i, label in enumerate(class_names):
     fpr, tpr, _ = roc_curve(y_true_bin[:, i], preds[:, i])
-    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})', lw=2)
-plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
-plt.title("ROC Analysis")
+    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.3f})')
+plt.plot([0, 1], [0, 1], 'k--')
 plt.legend()
 plt.savefig(os.path.join(EVAL_OUT_DIR, "roc_analysis.png"), dpi=300)
 plt.close()
 
-# =====================================================================
-# 6. GRAD-CAM (Clinical Interpretation)
-# =====================================================================
+# Grad-CAM (Örnek Görselleştirme)
 def get_gradcam(model, img_array):
     last_conv_layer = next(l for l in reversed(model.layers) if isinstance(l, tf.keras.layers.Conv2D))
     grad_model = tf.keras.models.Model([model.inputs], [last_conv_layer.output, model.output])
@@ -140,7 +123,6 @@ def get_gradcam(model, img_array):
     cam = np.maximum(cam, 0)
     return cam / (np.max(cam) + 1e-10)
 
-# Örnek Grad-CAM kaydı
 sample_idx = 0
 img_arr = tf.keras.preprocessing.image.img_to_array(tf.keras.preprocessing.image.load_img(test_df.iloc[sample_idx]["Path"], target_size=(256, 256))) / 255.0
 cam = get_gradcam(model, np.expand_dims(img_arr, axis=0))
@@ -148,4 +130,15 @@ heatmap = cv2.applyColorMap(np.uint8(255 * cv2.resize(cam, (256, 256))), cv2.COL
 res = cv2.addWeighted(np.uint8(255 * img_arr), 0.6, heatmap, 0.4, 0)
 cv2.imwrite(os.path.join(EVAL_OUT_DIR, "gradcam_explanation.png"), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
 
-print(f"\n✅ Evaluation complete. Results: {EVAL_OUT_DIR}/")
+# Donanım ve Performans Özeti
+tech_report = {
+    "Best_Model_Path": MODEL_PATH,
+    "Device": device_name,
+    "Latency_ms": round(latency, 2),
+    "Throughput_FPS": round(fps, 2),
+    "Test_Accuracy": float(np.mean(y_true == y_pred))
+}
+with open(os.path.join(EVAL_OUT_DIR, "performance_summary.json"), "w") as f:
+    json.dump(tech_report, f, indent=4)
+
+print(f"\n✅ Tüm analizler tamamlandı. Sonuçlar: {EVAL_OUT_DIR}/")
