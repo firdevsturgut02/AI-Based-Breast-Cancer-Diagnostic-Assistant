@@ -1,14 +1,18 @@
 """
 model_factory.py
 ----------------
-Model architecture construction module for breast cancer classification.
-Implements DenseNet121 integrated with Convolutional Block Attention Module (CBAM).
+Hybrid CNN Architecture for Breast Ultrasound Classification.
+Combines DenseNet121 with the Convolutional Block Attention Module (CBAM).
 
-Technical Features:
-✅ Keras 3 Native Operations (keras.ops) for cross-backend compatibility.
-✅ Integrated Channel and Spatial Attention mechanisms.
-✅ Automated architectural visualization and summary logging.
-✅ Optimized for single-stage 50-epoch full-network training.
+Technical Highlights:
+    ✅ Cross-backend compatibility using keras.ops
+    ✅ Integrated Channel & Spatial Attention (CBAM)
+    ✅ Automated model visualization and structured summary export
+    ✅ End-to-end trainable DenseNet backbone for 50-epoch optimization
+
+Author: [Your Name]
+Affiliation: [Your Institution / Research Group]
+Date: [Auto-generated]
 """
 
 # =====================================================================
@@ -17,83 +21,102 @@ Technical Features:
 import os
 import time
 import tensorflow as tf
-from keras import ops  # Keras 3 operations for tensor manipulation
+from keras import ops
 from tensorflow.keras.applications import DenseNet121
 from tensorflow.keras.layers import (
     GlobalAveragePooling2D, Dense, Dropout, BatchNormalization,
-    Conv2D, Multiply, Add, Activation, Reshape, GlobalMaxPooling2D, Input
+    Conv2D, Multiply, Add, Activation, Reshape,
+    GlobalMaxPooling2D, Input
 )
 from tensorflow.keras.models import Model
 
+
 # =====================================================================
-# 2. DIRECTORY CONFIGURATION
+# 2. OUTPUT DIRECTORY CONFIGURATION
 # =====================================================================
 BASE_RESULTS = "results"
 MODEL_FACTORY_DIR = os.path.join(BASE_RESULTS, "model_factory")
 os.makedirs(MODEL_FACTORY_DIR, exist_ok=True)
 
+
 # =====================================================================
-# 3. CBAM ATTENTION MECHANISM
+# 3. CBAM MODULE
 # =====================================================================
-def cbam_block(input_tensor, ratio=8):
+def cbam_block(input_tensor, ratio: int = 8):
     """
-    Implementation of Convolutional Block Attention Module (CBAM).
-    Refines feature maps through both channel and spatial dimensions.
+    Implements the Convolutional Block Attention Module (CBAM).
+    Enhances representational power via sequential Channel & Spatial Attention.
+
+    Args:
+        input_tensor: Feature map input tensor.
+        ratio: Reduction ratio for channel attention.
+
+    Returns:
+        Refined feature map after channel and spatial attention operations.
     """
     channel = input_tensor.shape[-1]
 
-    # --- Channel Attention Sub-module ---
-    # Shared MLP layers
-    shared_dense_1 = Dense(channel // ratio, activation='relu', use_bias=False, kernel_initializer='he_normal')
-    shared_dense_2 = Dense(channel, use_bias=False, kernel_initializer='he_normal')
+    # ---- Channel Attention ----
+    shared_dense_1 = Dense(channel // ratio, activation='relu',
+                           kernel_initializer='he_normal', use_bias=False)
+    shared_dense_2 = Dense(channel, kernel_initializer='he_normal', use_bias=False)
 
-    # Avg and Max pooling paths
+    # Global Average Pooling
     avg_pool = GlobalAveragePooling2D()(input_tensor)
     avg_pool = Reshape((1, 1, channel))(avg_pool)
     avg_pool = shared_dense_2(shared_dense_1(avg_pool))
 
+    # Global Max Pooling
     max_pool = GlobalMaxPooling2D()(input_tensor)
     max_pool = Reshape((1, 1, channel))(max_pool)
     max_pool = shared_dense_2(shared_dense_1(max_pool))
 
-    # Element-wise summation and sigmoid activation
+    # Combine and activate
     channel_attention = Add()([avg_pool, max_pool])
     channel_attention = Activation('sigmoid')(channel_attention)
     channel_refined = Multiply()([input_tensor, channel_attention])
 
-    # --- Spatial Attention Sub-module ---
-    # Global statistics across the channel dimension using Keras ops
+    # ---- Spatial Attention ----
     avg_spatial = ops.mean(channel_refined, axis=-1, keepdims=True)
     max_spatial = ops.amax(channel_refined, axis=-1, keepdims=True)
-    
-    # Concatenation and spatial convolution
     concat = ops.concatenate([avg_spatial, max_spatial], axis=-1)
-    spatial_attention = Conv2D(1, kernel_size=7, padding='same', activation='sigmoid', kernel_initializer='he_normal')(concat)
 
-    # Final refined output
+    spatial_attention = Conv2D(1, kernel_size=7, strides=1, padding='same',
+                               activation='sigmoid', kernel_initializer='he_normal')(concat)
     refined_output = Multiply()([channel_refined, spatial_attention])
+
     return refined_output
 
+
 # =====================================================================
-# 4. MODEL CONSTRUCTION (DENSENET121 + CBAM)
+# 4. MODEL CONSTRUCTION (DenseNet121 + CBAM)
 # =====================================================================
-def build_densenet_cbam(num_classes=3, input_shape=(256, 256, 3), weights='imagenet'):
+def build_densenet_cbam(
+    num_classes: int = 3,
+    input_shape=(256, 256, 3),
+    weights: str = "imagenet"
+) -> Model:
     """
-    Assembles the hybrid DenseNet121-CBAM model for pathological classification.
+    Constructs a hybrid DenseNet121-CBAM model for medical image classification.
+
+    Args:
+        num_classes: Number of output diagnostic categories.
+        input_shape: Expected input tensor shape.
+        weights: Pretraining source for DenseNet backbone ('imagenet' or None).
+
+    Returns:
+        A compiled tf.keras Model instance.
     """
     inputs = Input(shape=input_shape)
-    
-    # Pre-trained DenseNet121 backbone
     base_model = DenseNet121(include_top=False, weights=weights, input_tensor=inputs)
-    
-    # Enable full model training for the requested 50-epoch run
-    base_model.trainable = True 
 
-    # Integration of CBAM at the end of the feature extraction layers
-    x = base_model.output
-    x = cbam_block(x) 
-    
-    # Classification Head
+    # Enable fine-tuning of all layers
+    base_model.trainable = True
+
+    # Apply CBAM after final DenseNet convolutional block
+    x = cbam_block(base_model.output)
+
+    # Classification head
     x = GlobalAveragePooling2D()(x)
     x = Dense(512, activation='relu', kernel_initializer='he_normal')(x)
     x = BatchNormalization()(x)
@@ -102,45 +125,63 @@ def build_densenet_cbam(num_classes=3, input_shape=(256, 256, 3), weights='image
     x = Dropout(0.3)(x)
     outputs = Dense(num_classes, activation='softmax')(x)
 
-    model = Model(inputs=inputs, outputs=outputs)
-    
-    # Compiler Configuration
+    model = Model(inputs=inputs, outputs=outputs, name="DenseNet121_CBAM")
+
+    # Optimizer and metrics setup
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-        loss='categorical_crossentropy',
-        metrics=['accuracy', tf.keras.metrics.AUC(name='auc')]
+        loss="categorical_crossentropy",
+        metrics=["accuracy", tf.keras.metrics.AUC(name="auc")]
     )
 
-    print("✅ DenseNet121 + CBAM architecture constructed successfully.")
+    print("✅ DenseNet121 + CBAM hybrid model successfully constructed.")
     return model
 
+
 # =====================================================================
-# 5. ENTRY POINT & VISUALIZATION
+# 5. FACTORY WRAPPER & DOCUMENTATION EXPORT
 # =====================================================================
-def get_model(num_classes=3, input_shape=(256, 256, 3), export_outputs=True):
+def get_model(
+    num_classes: int = 3,
+    input_shape=(256, 256, 3),
+    export_outputs: bool = True
+) -> Model:
     """
-    Factory method to retrieve the model and generate technical documentations.
+    Factory wrapper to construct, compile, and document the model.
+
+    Automatically saves:
+        - Model summary (TXT)
+        - Architectural diagram (PNG)
     """
     model = build_densenet_cbam(num_classes=num_classes, input_shape=input_shape)
 
     if export_outputs:
-        # Save structural summary
+        # Export model summary
         summary_path = os.path.join(MODEL_FACTORY_DIR, "model_summary.txt")
         with open(summary_path, "w") as f:
             model.summary(print_fn=lambda x: f.write(x + "\n"))
-        
-        # Save architectural diagram (Graphviz/Pydot required)
+
+        # Export architecture diagram
         try:
             plot_path = os.path.join(MODEL_FACTORY_DIR, "architecture_diagram.png")
-            tf.keras.utils.plot_model(model, to_file=plot_path, show_shapes=True, show_layer_names=True)
-            print(f"🖼️ Architecture diagram exported to {plot_path}")
+            tf.keras.utils.plot_model(
+                model, to_file=plot_path,
+                show_shapes=True, show_layer_names=True,
+                dpi=120
+            )
+            print(f"🖼️ Architectural diagram exported → {plot_path}")
         except Exception as e:
-            print(f"⚠️ Diagram export failed (Check pydot/graphviz): {e}")
+            print(f"⚠️ Diagram export failed (missing Graphviz/Pydot): {e}")
 
-        print(f"🧾 Model summary saved to {summary_path}")
+        print(f"🧾 Model summary saved at → {summary_path}")
 
     return model
 
+
+# =====================================================================
+# 6. INTERNAL VALIDATION ENTRY POINT
+# =====================================================================
 if __name__ == "__main__":
-    # Internal validation
-    get_model()
+    start_time = time.time()
+    model = get_model()
+    print(f"⏱️ Model initialization completed in {time.time() - start_time:.2f}s")
