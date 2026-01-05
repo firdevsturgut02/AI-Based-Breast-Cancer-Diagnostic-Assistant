@@ -2,9 +2,8 @@
 evaluator.py
 -------------
 Final Model Evaluation and Clinical Interpretability Module
-for Breast Ultrasound Image Classification (Academic Edition).
+for Breast Ultrasound Image Classification
 
-Version: 2.0
 Core Features:
     ✅ Hardware Benchmarking (GPU/CPU Profiling)
     ✅ Inference Latency & FPS Measurement
@@ -12,9 +11,7 @@ Core Features:
     ✅ Grad-CAM Visualization for Clinical Explainability
     ✅ Structured JSON Report for Publication & Archiving
 
-Author: [Your Name]
-Affiliation: [Your Institution]
-Date: [Auto-generated]
+
 """
 
 # =====================================================================
