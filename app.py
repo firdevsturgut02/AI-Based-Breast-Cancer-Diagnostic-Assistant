@@ -1,274 +1,243 @@
 """
 DeepScan: AI-Powered Breast Ultrasound Diagnostic Assistant
-----------------------------------------------------------
-Advanced clinical-style interface for automated breast ultrasound classification
-using DenseNet121 + CBAM attention mechanism and AI-based clinical insights.
-
-Author: Firdevs Turgut
-Affiliation: AI-Based Breast Cancer Diagnostic Assistant (Research Project)
-Date: 2025-12-25
+Professional Unified Version
 """
 
-# =====================================================================
-# 1. LIBRARY IMPORTS
-# =====================================================================
+import sys
+import os
 import streamlit as st
 import tensorflow as tf
 import numpy as np
 from PIL import Image
-import os
 from datetime import date
 from dotenv import load_dotenv
-from src.ai_agent import MedicalAssistant
+from keras.utils import custom_object_scope
+
+# Add 'src' directory to path
+sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
+from ai_agent import MedicalAssistant
 
 # =====================================================================
-# 2. ENVIRONMENT CONFIGURATION
+# 1. CONFIGURATION & STYLE
 # =====================================================================
 load_dotenv()
 api_key = os.getenv("GROQ_API_KEY")
 
-# =====================================================================
-# 3. PAGE CONFIGURATION
-# =====================================================================
 st.set_page_config(
-    page_title="DeepScan | Breast Cancer AI Assistant",
+    page_title="DeepScan | AI Breast Assistant",
     page_icon="🔬",
     layout="wide"
 )
 
-# =====================================================================
-# 4. CUSTOM STYLING
-# =====================================================================
-st.markdown("""
-<style>
-    .main { background-color: #F9FAFB; }
-    .stButton>button {
-        width: 100%;
-        border-radius: 8px;
-        background-color: #2563EB;
-        color: white;
-        height: 3em;
-        font-weight: 500;
-        transition: all 0.3s ease;
-    }
-    .stButton>button:hover { background-color: #1E40AF; }
-    .result-card {
-        background-color: #FFFFFF;
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #E5E7EB;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        margin-bottom: 15px;
-    }
-    .report-box {
-        background-color: #FFFFFF;
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #E5E7EB;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.08);
-    }
-    .chat-box {
-        background-color: #F3F4F6;
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #E5E7EB;
-        height: 500px;
-        overflow-y: auto;
-    }
-    .user-msg { color: #1E3A8A; font-weight: 600; }
-    .ai-msg { color: #111827; }
-</style>
-""", unsafe_allow_html=True)
-
-# =====================================================================
-# 5. SIDEBAR CONFIGURATION
-# =====================================================================
-with st.sidebar:
-    st.image("assets/assistant-avatar.png", width=110)
-    st.title("System Status")
-
-    if api_key:
-        st.success("✅ Groq API key loaded successfully.")
-    else:
-        st.error("⚠️ Missing Groq API key in .env file!")
-
+def apply_custom_styles():
     st.markdown("""
-    ---
-    **Model:** DenseNet121 + CBAM  
-    **Framework:** TensorFlow / Keras 3  
-    **Application:** Breast Ultrasound Classification  
-    **Purpose:** Academic research and interpretability analysis.
-    ---
-    """)
+        <style>
+        .stApp { background-color: #F8FAFC; }
+        
+        /* Clinical Report Design */
+        .report-container {
+            background-color: #FFFFFF;
+            padding: 25px;
+            border-radius: 12px;
+            border: 1px solid #E2E8F0;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            height: 550px;
+            overflow-y: auto;
+            color: #1E293B;
+        }
+        
+        /* Style of Chat */
+        .chat-container {
+            background-color: #e5ddd5;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+            display: flex;
+            flex-direction: column;
+            min-height: 200px;
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid #d1d1d1;
+        }
+
+        .message {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            max-width: 85%;
+            font-size: 14px;
+            line-height: 1.5;
+            box-shadow: 0 1px 0.5px rgba(0,0,0,0.1);
+        }
+
+        .user-bubble {
+            background-color: #dcf8c6;
+            align-self: flex-end;
+            border-radius: 7.5px 0 7.5px 7.5px;
+            margin-left: auto;
+        }
+
+        .ai-bubble {
+            background-color: #ffffff;
+            align-self: flex-start;
+            border-radius: 0 7.5px 7.5px 7.5px;
+            margin-right: auto;
+        }
+
+        .sender-label {
+            font-size: 11px;
+            font-weight: bold;
+            color: #075e54;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .result-card {
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            color: white;
+            font-weight: 700;
+            font-size: 1.6rem;
+            margin-bottom: 20px;
+        }
+
+        /* Form styling to remove borders and padding */
+        div[data-testid="stForm"] {
+            border: none;
+            padding: 0;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+apply_custom_styles()
 
 # =====================================================================
-# 6. MODEL LOADING WITH CUSTOM OBJECTS
+# 2. MODEL LOADING
 # =====================================================================
 @st.cache_resource
-def load_best_model():
-    """Load trained DenseNet121 + CBAM model with custom layers."""
-    model_path = os.path.join("results", "trainer", "models", "best_model.h5")
-    if not os.path.exists(model_path):
-        st.error("⚠️ Model file not found at 'results/trainer/models/best_model.h5'.")
-        return None
-
+def load_analysis_model():
+    path = "results/trainer/models/best_model.h5"
+    if not os.path.exists(path): return None
     try:
-        model = tf.keras.models.load_model(model_path, compile=False)
-        st.success("✅ Model loaded successfully.")
-        return model
-    except Exception:
-        from tensorflow.keras.layers import Layer
-        class CBAM(Layer): 
-            def call(self, x): return x
-        class Mean(Layer): 
-            def __init__(self, axis=-1, keepdims=True, **kwargs): 
-                super().__init__(**kwargs); self.axis=axis; self.keepdims=keepdims
-            def call(self, x): return tf.reduce_mean(x, axis=self.axis, keepdims=self.keepdims)
-        class Amax(Layer): 
-            def __init__(self, axis=-1, keepdims=True, **kwargs): 
-                super().__init__(**kwargs); self.axis=axis; self.keepdims=keepdims
-            def call(self, x): return tf.reduce_max(x, axis=self.axis, keepdims=self.keepdims)
+        def Mean(**kwargs): return tf.keras.layers.Lambda(lambda x: tf.reduce_mean(x, axis=kwargs.get("axis", -1), keepdims=kwargs.get("keepdims", True)))
+        def Amax(**kwargs): return tf.keras.layers.Lambda(lambda x: tf.reduce_max(x, axis=kwargs.get("axis", -1), keepdims=kwargs.get("keepdims", True)))
+        custom_objects = {"Mean": Mean, "Amax": Amax, "Average": Mean}
+        with custom_object_scope(custom_objects):
+            return tf.keras.models.load_model(path, compile=False)
+    except: return None
 
-        model = tf.keras.models.load_model(
-            model_path, custom_objects={"CBAM": CBAM, "Mean": Mean, "Amax": Amax}, compile=False
-        )
-        st.success("✅ Model loaded successfully with CBAM, Mean, Amax custom layers.")
-        return model
-
-model = load_best_model()
+model = load_analysis_model()
 
 # =====================================================================
-# 7. HEADER & INTRODUCTION
+# 3. SIDEBAR
 # =====================================================================
-if os.path.exists("assets/medical-abstract-hero.png"):
-    st.image("assets/medical-abstract-hero.png", use_container_width=True)
-
-st.title("🔬 DeepScan: AI-Powered Breast Ultrasound Diagnostic Assistant")
-st.write("""
-A clinical-grade research prototype demonstrating automated classification of 
-breast ultrasound scans using **DenseNet121 + CBAM**.  
-This assistant provides prediction confidence and AI-generated clinical insights.
-""")
-
-# =====================================================================
-# 8. PATIENT INFORMATION (Female fixed)
-# =====================================================================
-st.subheader("🧍 Patient Information")
-
-col1, col2 = st.columns(2)
-with col1:
-    patient_name = st.text_input("Patient Name", placeholder="e.g. Jane Doe")
-    age = st.number_input("Age", min_value=1, max_value=120, value=45)
-with col2:
-    exam_date = st.date_input("Exam Date", value=date.today())
-
-
-st.markdown("---")
-
-# =====================================================================
-# 9. IMAGE UPLOAD & ANALYSIS
-# =====================================================================
-st.subheader("📸 Upload Ultrasound Scan")
-uploaded_file = st.file_uploader("Upload a Breast Ultrasound Image", type=["jpg", "jpeg", "png"])
-
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Ultrasound Scan", use_container_width=True)
-
-    if st.button("🔍 Analyze Scan"):
-        if model:
-            with st.spinner("Analyzing image using DenseNet121 + CBAM network..."):
-                img_resized = image.resize((256, 256))
-                img_array = np.expand_dims(np.array(img_resized) / 255.0, axis=0)
-
-                preds = model.predict(img_array)
-                class_names = ["Benign", "Malignant", "Normal"]
-                pred_idx = np.argmax(preds)
-                pred_label = class_names[pred_idx]
-                confidence = float(np.max(preds) * 100)
-
-                st.session_state['pred'] = pred_label
-                st.session_state['conf'] = confidence
-
-                color = "#10B981" if pred_label == "Normal" else "#F59E0B" if pred_label == "Benign" else "#EF4444"
-                st.markdown(f"""
-                <div class="result-card">
-                    <h2 style="color:{color}; margin-top:0;">Prediction: {pred_label}</h2>
-                    <p><b>Confidence:</b> {confidence:.2f}%</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if api_key:
-                    assistant = MedicalAssistant(api_key)
-                    patient_info = (
-                        f"Patient: {patient_name or '[Not Provided]'} | "
-                        f"Age: {age} | Exam Date: {exam_date}\n"
-                        f"Modality: Ultrasound | Anatomical Region: Breast"
-                    )
-                    ai_response = assistant.get_clinical_insight(pred_label, confidence)
-                    if ai_response["status"] == "success":
-                        st.session_state['insight'] = ai_response["output"]
-                        st.session_state['patient_info'] = patient_info
-                    else:
-                        st.error(ai_response["message"])
-        else:
-            st.error("❌ Model not loaded. Please check model path or integrity.")
-
-# =====================================================================
-# 10. CLINICAL REPORT & CHAT SIDE BY SIDE
-# =====================================================================
-if 'pred' in st.session_state:
+with st.sidebar:
+    avatar_path = "assets/assistant-avatar.png"
+    if os.path.exists(avatar_path):
+        st.image(avatar_path, width=120)
+    
+    st.title("DeepScan AI")
     st.markdown("---")
-    st.subheader("🧠 AI Clinical Discussion")
+    st.subheader("Patient Records")
+    p_name = st.text_input("Name", placeholder="Patient Full Name")
+    p_age = st.number_input("Age", 1, 120, 45)
+    e_date = st.date_input("Exam Date", date.today())
 
-    col_left, col_right = st.columns([1.5, 1])
-    with col_left:
-        if 'insight' in st.session_state:
-            st.markdown(f"""
-            <div class="report-box">
-                <h4>Automated Interpretation Report</h4>
-                <p><b>{st.session_state.get('patient_info', '')}</b></p>
-                <hr>
-                <p>{st.session_state['insight']}</p>
-                <hr>
-                <small><i>Disclaimer: AI-assisted preliminary assessment, not a medical diagnosis.</i></small>
+# =====================================================================
+# 4. HERO SECTION
+# =====================================================================
+h_col1, h_col2 = st.columns([2, 1])
+with h_col1:
+    st.title("Breast Ultrasound Analysis")
+    st.markdown("Automated diagnostic support and clinical reporting system.")
+with h_col2:
+    hero_path = "assets/medical-abstract-hero.png"
+    if os.path.exists(hero_path):
+        st.image(hero_path, use_container_width=True)
+
+st.divider()
+
+# =====================================================================
+# 5. ANALYSIS & REPORTING
+# =====================================================================
+up_col, res_col = st.columns([1, 1], gap="large")
+
+with up_col:
+    st.subheader("Image Upload")
+    uploaded_file = st.file_uploader("Upload scan", type=["jpg", "jpeg", "png"])
+    
+    if uploaded_file:
+        image = Image.open(uploaded_file).convert("RGB")
+        st.image(image, caption="Ultrasound Scan", use_container_width=True)
+        
+        if st.button("RUN ANALYSIS", use_container_width=True):
+            if model:
+                with st.spinner("Processing..."):
+                    img_array = np.expand_dims(np.array(image.resize((256, 256))) / 255.0, axis=0)
+                    preds = model.predict(img_array)
+                    classes = ["Benign", "Malignant", "Normal"]
+                    idx = np.argmax(preds)
+                    
+                    st.session_state["p_class"] = classes[idx]
+                    st.session_state["p_conf"] = float(np.max(preds) * 100)
+                    
+                    if api_key:
+                        assistant = MedicalAssistant(api_key)
+                        meta = {"name": p_name, "age": p_age, "exam_date": str(e_date)}
+                        report_resp = assistant.generate_clinical_report(st.session_state["p_class"], st.session_state["p_conf"], meta)
+                        st.session_state["p_report"] = report_resp.get("report", "")
+
+with res_col:
+    if "p_class" in st.session_state:
+        st.subheader("Result")
+        color = "#EF4444" if st.session_state["p_class"] == "Malignant" else "#10B981" if st.session_state["p_class"] == "Normal" else "#F59E0B"
+        
+        st.markdown(f"""
+            <div class="result-card" style="background-color: {color};">
+                {st.session_state["p_class"].upper()} <br>
+                <span style="font-size: 0.9rem; font-weight: 300;">Confidence: {st.session_state["p_conf"]:.2f}%</span>
             </div>
-            """, unsafe_allow_html=True)
-
-    with col_right:
-        st.markdown("#### 💬 Clinical Assistant Chat")
-        if "chat_history" not in st.session_state:
-            st.session_state["chat_history"] = []
-
-        user_input = st.text_input("Ask a question about this diagnosis:")
-
-        if user_input and api_key:
-            assistant = MedicalAssistant(api_key)
-            chat_response = assistant.chat(
-                user_query=user_input,
-                context=st.session_state.get("insight", "")
-            )
-            if chat_response["status"] == "success":
-                st.session_state["chat_history"].append(("user", user_input))
-                st.session_state["chat_history"].append(("ai", chat_response["reply"]))
-            else:
-                st.error(chat_response["message"])
-
-        # Display chat history
-        st.markdown("<div class='chat-box'>", unsafe_allow_html=True)
-        for role, msg in st.session_state["chat_history"]:
-            if role == "user":
-                st.markdown(f"<p class='user-msg'>🧍‍♀️ {msg}</p>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<p class='ai-msg'>🤖 {msg}</p>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+        
+        if "p_report" in st.session_state:
+            st.markdown("##### Clinical Findings")
+            st.markdown(f'<div class="report-container">{st.session_state["p_report"]}</div>', unsafe_allow_html=True)
 
 # =====================================================================
-# 11. FOOTER
+# 6. CHAT Module
 # =====================================================================
-st.markdown("""
----
-**DeepScan Breast AI Assistant**  
-_Research-Only Academic Prototype — Not for Clinical Use_  
-Developed using TensorFlow, Keras 3, and Groq Llama 3.  
-""")
+if "p_report" in st.session_state:
+    st.divider()
+    st.subheader("Clinical Assistant Chat")
+    
+    if "chat_history" not in st.session_state:
+        st.session_state["chat_history"] = []
+
+    # Chat Display
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    if not st.session_state["chat_history"]:
+        st.markdown('<div style="text-align:center; color:#888; font-size:13px; margin-top:20px;">No messages yet. Ask about BI-RADS or findings below.</div>', unsafe_allow_html=True)
+    
+    for sender, msg in st.session_state["chat_history"]:
+        if sender == "You":
+            st.markdown(f'<div class="message user-bubble">{msg}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="message ai-bubble"><span class="sender-label">Assistant</span>{msg}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Chat Input
+    with st.form("chat_form", clear_on_submit=True):
+        col_input, col_btn = st.columns([5, 1])
+        with col_input:
+            user_q = st.text_input("Message", placeholder="Type your question here...", label_visibility="collapsed")
+        with col_btn:
+            if st.form_submit_button("Send") and user_q and api_key:
+                assistant = MedicalAssistant(api_key)
+                chat_resp = assistant.chat(user_q, st.session_state["p_report"])
+                if chat_resp["status"] == "success":
+                    ans = chat_resp.get("reply") or chat_resp.get("output", "")
+                    st.session_state["chat_history"].append(("You", user_q))
+                    st.session_state["chat_history"].append(("Assistant", ans))
+                    st.rerun()
+
+st.markdown("<br><center><small>DeepScan AI v2.2 | Academic Research | 2026</small></center>", unsafe_allow_html=True)
