@@ -10,9 +10,6 @@ Technical Highlights:
     ✅ Automated model visualization and structured summary export
     ✅ End-to-end trainable DenseNet backbone for 50-epoch optimization
 
-Author: [Your Name]
-Affiliation: [Your Institution / Research Group]
-Date: [Auto-generated]
 """
 
 # =====================================================================
