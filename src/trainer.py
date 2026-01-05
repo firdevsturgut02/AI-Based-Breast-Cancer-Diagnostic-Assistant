@@ -3,8 +3,6 @@ trainer.py
 -----------
 Unified Scientific Training Pipeline for Breast Ultrasound Image Classification.
 
-Version: 2.0 (Academic Edition)
-Target: >90% Accuracy with High Reproducibility and Technical Traceability.
 
 Key Features:
     ✅ 50-Epoch Continuous Training (No Early Stopping)
@@ -13,9 +11,6 @@ Key Features:
     ✅ Technical Summary Export (CSV)
     ✅ Deterministic, Modular, and PEP8-Compliant
 
-Author: [Your Name]
-Affiliation: [Your Institution]
-Date: [Auto-generated at runtime]
 """
 
 # =====================================================================
