@@ -2,7 +2,7 @@
 data_loader.py
 -------------------------------------------------
 Advanced Data Loading, Statistical Analysis, and Augmentation Module
-for Breast Ultrasound Classification (Academic-Grade).
+for Breast Ultrasound Classification.
 
 Outputs stored in: results/data_loader/
 
